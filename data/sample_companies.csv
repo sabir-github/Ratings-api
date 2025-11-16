@@ -1,0 +1,6 @@
+id,company_code,company_name,active
+100000001,C001,NextGen Insurance Corporation,true
+100000002,C002,Global Tech Solutions,true
+100000003,C003,Innovate Manufacturing Ltd,false
+100000004,C004,Quantum Financial Services,true
+100000005,C005,Alpha Healthcare Group,true
