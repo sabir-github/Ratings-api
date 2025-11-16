@@ -46,14 +46,14 @@ class RatingTableService(LobService):
         existing_product = await collection.find_one({
             "$and": [
                 #{"id": ratingtable_id},
-                {"table_code": ratingtable_data.table_code},
-                {"table_name": ratingtable_data.table_name},
-                {"company": ratingtable_data.company},
+                #{"table_code": ratingtable_data.table_code},
+                #{"table_name": ratingtable_data.table_name},
+                #{"company": ratingtable_data.company},
                 {"company": ratingtable_data.company},
                 {"lob": ratingtable_data.lob},
                 {"state": ratingtable_data.state},
                 {"product": ratingtable_data.product},
-                #{"data": ratingtable_data.data}
+                {"data": ratingtable_data.data}
             ]
         })
         
