@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # OAuth2 Bearer token scheme
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # Don't auto-raise error, handle manually
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
@@ -67,6 +67,11 @@ async def verify_token(token: str) -> Optional[Dict[str, Any]]:
     Verify and decode a token (OIDC or local JWT)
     Tries OIDC provider first, falls back to local JWT if no provider configured
     """
+    # If OIDC security is disabled, skip verification
+    if not settings.ENABLE_OIDC_SECURITY:
+        logger.debug("OIDC security disabled, skipping token verification")
+        return None
+    
     # Try OIDC provider first
     provider = get_auth_provider()
     if provider:
@@ -88,16 +93,35 @@ async def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Dict[str, Any]:
     """
-    Get current user from OIDC or local JWT token
+    Get current user from OIDC or local JWT token.
+    If OIDC security is disabled, returns a default anonymous user.
     """
+    # If OIDC security is disabled, return anonymous user
+    if not settings.ENABLE_OIDC_SECURITY:
+        logger.debug("OIDC security disabled, returning anonymous user")
+        return {
+            "sub": "anonymous",
+            "username": "anonymous",
+            "id": "anonymous",
+            "user_id": None,
+            "email": None,
+            "roles": [],
+            "role": None,
+            "claims": {},
+        }
+    
+    # OIDC security is enabled - require authentication
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    if not credentials:
+        raise credentials_exception
     
     token = credentials.credentials
     payload = await verify_token(token)

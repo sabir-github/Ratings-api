@@ -12,7 +12,7 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # Don't auto-raise error, handle manually
 
 
 class UserInfoResponse(BaseModel):
@@ -35,6 +35,7 @@ async def auth_health():
     return {
         "status": "healthy",
         "service": "authentication",
+        "oidc_enabled": settings.ENABLE_OIDC_SECURITY,
         "provider": provider.get_provider_name() if provider else "none",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -42,19 +43,37 @@ async def auth_health():
 
 @router.get("/me", response_model=UserInfoResponse)
 async def get_current_user_info(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """
     Get current user information from validated access token
     
     This endpoint validates the Bearer token and returns user information.
     The token is validated using the configured OIDC provider (Keycloak).
+    If OIDC security is disabled, returns anonymous user info.
     """
+    # If OIDC security is disabled, return anonymous user
+    if not settings.ENABLE_OIDC_SECURITY:
+        return UserInfoResponse(
+            sub="anonymous",
+            email=None,
+            name=None,
+            preferred_username="anonymous",
+            roles=[],
+            groups=[],
+        )
+    
     provider = get_auth_provider()
     if not provider:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="No authentication provider configured"
+        )
+    
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required"
         )
     
     token = credentials.credentials

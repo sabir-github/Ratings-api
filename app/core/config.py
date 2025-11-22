@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # OAuth2/OIDC Settings
+    ENABLE_OIDC_SECURITY: bool = False  # Toggle to enable/disable OIDC security
     AUTH_PROVIDER: Literal["keycloak", "entra", "none"] = "keycloak"
     
     # Keycloak Settings
@@ -31,12 +32,22 @@ class Settings(BaseSettings):
     ENTRA_VERIFY_SSL: bool = True
     
     # Database Settings
-    MONGODB_URL: str = "mongodb://localhost:27017"
+    # Default connects to MongoDB from Ratings-api docker-compose
+    # Override via MONGODB_URL environment variable if needed
+    MONGODB_URL: str = "mongodb://admin:password@localhost:27017/?authSource=admin"
     MONGODB_DB_NAME: str = "ratings_db"
     DATABASE_NAME: str = "motor_management"
     
     # CORS Settings
-    BACKEND_CORS_ORIGINS: list = ["*"]
+    # List of allowed origins. For development, include common frontend ports
+    # For production, specify exact origins (e.g., ["https://yourdomain.com"])
+    BACKEND_CORS_ORIGINS: list = [
+        "http://localhost:5173",  # Vite default port
+        "http://localhost:3000",  # React default port
+        "http://localhost:5174",  # Alternative Vite port
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ]
     
     # Email Settings (for password reset)
     SMTP_HOST: Optional[str] = None

@@ -1,25 +1,84 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
 import logging
+import asyncio
+from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
 
 logger = logging.getLogger(__name__)
 
 class MongoDB:
     client: AsyncIOMotorClient = None
     database = None
+    connected: bool = False
 
 mongodb = MongoDB()
 
+async def verify_connection(max_retries: int = 5, retry_delay: float = 2.0) -> bool:
+    """Verify MongoDB connection with retry logic"""
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Ping the database to verify connection
+            await mongodb.client.admin.command('ping')
+            mongodb.connected = True
+            logger.info(f"Successfully connected to MongoDB at {settings.MONGODB_URL}")
+            return True
+        except (ServerSelectionTimeoutError, ConnectionFailure, Exception) as e:
+            if attempt < max_retries:
+                wait_time = retry_delay * (2 ** (attempt - 1))  # Exponential backoff
+                logger.warning(
+                    f"MongoDB connection attempt {attempt}/{max_retries} failed: {e}. "
+                    f"Retrying in {wait_time:.1f}s..."
+                )
+                await asyncio.sleep(wait_time)
+            else:
+                mongodb.connected = False
+                logger.error(
+                    f"Failed to connect to MongoDB after {max_retries} attempts. "
+                    f"Error: {e}. Please ensure MongoDB is running at {settings.MONGODB_URL}"
+                )
+                raise ConnectionFailure(
+                    f"Cannot connect to MongoDB at {settings.MONGODB_URL}. "
+                    f"Please start MongoDB or check your connection settings."
+                ) from e
+    return False
+
 async def connect_to_mongo():
-    mongodb.client = AsyncIOMotorClient(settings.MONGODB_URL)
-    mongodb.database = mongodb.client[settings.MONGODB_DB_NAME]
-    await create_indexes_and_validations()
-    await create_counter_collection()
+    """Connect to MongoDB with retry logic and setup indexes"""
+    try:
+        # Create client with connection timeout settings
+        mongodb.client = AsyncIOMotorClient(
+            settings.MONGODB_URL,
+            serverSelectionTimeoutMS=5000,  # 5 second timeout per attempt
+            connectTimeoutMS=5000
+        )
+        mongodb.database = mongodb.client[settings.MONGODB_DB_NAME]
+        
+        # Verify connection before proceeding
+        await verify_connection()
+        
+        # Only create indexes if connection is successful
+        if mongodb.connected:
+            await create_indexes_and_validations()
+            await create_counter_collection()
+            logger.info("MongoDB indexes and counters initialized successfully")
+    except Exception as e:
+        mongodb.connected = False
+        logger.error(f"Failed to initialize MongoDB connection: {e}")
+        raise
 
 async def close_mongo_connection():
-    mongodb.client.close()
+    """Close MongoDB connection"""
+    if mongodb.client:
+        mongodb.client.close()
+        mongodb.connected = False
+        logger.info("MongoDB connection closed")
 
 async def get_database() -> AsyncIOMotorClient:
+    """Get database instance, raising error if not connected"""
+    if not mongodb.connected or mongodb.database is None:
+        raise ConnectionFailure(
+            "Database not connected. Please ensure MongoDB is running and the connection was established."
+        )
     return mongodb.database
 
 async def create_counter_collection():
@@ -101,6 +160,10 @@ async def get_next_sequence_value(sequence_name: str) -> int:
     return result["sequence_value"]
 
 async def create_indexes_and_validations():
+    """Create indexes and validation schemas for all collections"""
+    if not mongodb.connected:
+        raise ConnectionFailure("Cannot create indexes: MongoDB not connected")
+    
     db = mongodb.database
     
     # Company collection indexes and validations
