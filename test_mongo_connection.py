@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 async def test_connection():
     client = AsyncIOMotorClient(
-        'mongodb://admin:password@localhost:27017/?authSource=admin',
+        'mongodb://admin:password@localhost:37017/?authSource=admin',
         serverSelectionTimeoutMS=5000
     )
     try:
