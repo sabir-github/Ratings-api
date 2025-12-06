@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import companies, lobs, products, states, contexts, upload, auth, users
+from app.api.v1.endpoints import companies, lobs, products, states, contexts, upload, auth, users, ratingtables, algorithms, ratingmanuals
 
 api_router = APIRouter()
 
@@ -11,5 +11,8 @@ api_router.include_router(lobs.router, prefix="/lobs", tags=["line-of-business"]
 api_router.include_router(states.router, prefix="/states", tags=["states"])
 api_router.include_router(products.router, prefix="/products", tags=["products"])
 api_router.include_router(contexts.router, prefix="/contexts", tags=["contexts"])
+api_router.include_router(ratingtables.router, prefix="/ratingtables", tags=["ratingtables"])
+api_router.include_router(algorithms.router, prefix="/algorithms", tags=["algorithms"])
+api_router.include_router(ratingmanuals.router, prefix="/ratingmanuals", tags=["ratingmanuals"])
 api_router.include_router(upload.router, prefix="/upload", tags=["upload"])
 

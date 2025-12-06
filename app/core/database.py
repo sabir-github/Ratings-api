@@ -81,6 +81,14 @@ async def get_database() -> AsyncIOMotorClient:
         )
     return mongodb.database
 
+async def get_client() -> AsyncIOMotorClient:
+    """Get MongoDB client instance for transactions, raising error if not connected"""
+    if not mongodb.connected or mongodb.client is None:
+        raise ConnectionFailure(
+            "Database not connected. Please ensure MongoDB is running and the connection was established."
+        )
+    return mongodb.client
+
 async def create_counter_collection():
     """Create counter collection for auto-incrementing IDs"""
     try:
@@ -140,6 +148,33 @@ async def create_counter_collection():
                 "sequence_value": 1000
         })
         logger.info("Created user_id counter with initial value 1000")
+
+        # Create counter for ratingtables if it doesn't exist
+        existing_ratingtable_counter = await counter_collection.find_one({"_id": "ratingtable_id"})
+        if not existing_ratingtable_counter:
+            await counter_collection.insert_one({
+                "_id": "ratingtable_id",
+                "sequence_value": 100000000
+        })
+        logger.info("Created ratingtable_id counter with initial value 100000000")
+
+        # Create counter for algorithms if it doesn't exist
+        existing_algorithm_counter = await counter_collection.find_one({"_id": "algorithm_id"})
+        if not existing_algorithm_counter:
+            await counter_collection.insert_one({
+                "_id": "algorithm_id",
+                "sequence_value": 100000000
+        })
+        logger.info("Created algorithm_id counter with initial value 100000000")
+
+        # Create counter for ratingmanuals if it doesn't exist
+        existing_ratingmanual_counter = await counter_collection.find_one({"_id": "ratingmanual_id"})
+        if not existing_ratingmanual_counter:
+            await counter_collection.insert_one({
+                "_id": "ratingmanual_id",
+                "sequence_value": 100000000
+            })
+            logger.info("Created ratingmanual_id counter with initial value 100000000")
     except Exception as e:
         logger.error(f"Error creating counter collection: {e}")
 
@@ -158,6 +193,28 @@ async def get_next_sequence_value(sequence_name: str) -> int:
         raise ValueError(f"Sequence {sequence_name} not found")
     
     return result["sequence_value"]
+
+async def rollback_sequence_value(sequence_name: str) -> bool:
+    """Rollback (decrement) the sequence value for the specified sequence"""
+    try:
+        db = await get_database()
+        counter_collection = db["counters"]
+        
+        result = await counter_collection.find_one_and_update(
+            {"_id": sequence_name},
+            {"$inc": {"sequence_value": -1}},
+            return_document=True
+        )
+        
+        if not result:
+            logger.warning(f"Could not rollback sequence {sequence_name}: sequence not found")
+            return False
+        
+        logger.info(f"Rolled back sequence {sequence_name} to {result['sequence_value']}")
+        return True
+    except Exception as e:
+        logger.error(f"Error rolling back sequence {sequence_name}: {e}")
+        return False
 
 async def create_indexes_and_validations():
     """Create indexes and validation schemas for all collections"""
@@ -393,6 +450,360 @@ async def create_indexes_and_validations():
                     "questions": {
                         "bsonType": "array",
                         "description": "must be a boolean and is required"
+                    },
+                    "created_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "updated_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    }
+                }
+            }
+        },
+        "validationLevel": "strict"
+    })
+
+    # RatingTable collection indexes and validations
+    ratingtable_collection = db["ratingtables"]
+    
+    # Create indexes
+    await ratingtable_collection.create_index("id", unique=True)
+    await ratingtable_collection.create_index("table_name")
+    await ratingtable_collection.create_index("table_type")
+    await ratingtable_collection.create_index("active")
+    await ratingtable_collection.create_index("company")
+    await ratingtable_collection.create_index("lob")
+    await ratingtable_collection.create_index("state")
+    await ratingtable_collection.create_index("product")
+    await ratingtable_collection.create_index("context")
+    await ratingtable_collection.create_index("effective_date")
+    await ratingtable_collection.create_index("expiration_date")
+    
+    # Create compound unique index for primary unique combination
+    # table_name + company + lob + state + product + effective_date
+    # Partial index: only applies to active records (active: true)
+    try:
+        # Drop existing index with the same name if it exists (to handle specification changes)
+        try:
+            await ratingtable_collection.drop_index("unique_combination_idx")
+            logger.info("Dropped existing unique_combination_idx index to recreate with updated specification")
+        except Exception as drop_error:
+            # Index doesn't exist or couldn't be dropped, that's fine
+            logger.debug(f"Could not drop existing unique_combination_idx index (may not exist): {drop_error}")
+        
+        # Create the new index with partial filter expression
+        await ratingtable_collection.create_index(
+            [("table_name", 1), ("company", 1), ("lob", 1), ("state", 1), ("product", 1), ("effective_date", 1)],
+            unique=True,
+            partialFilterExpression={"active": True},
+            name="unique_combination_idx"
+        )
+        logger.info("Created compound unique partial index for table_name+company+lob+state+product+effective_date (active records only)")
+    except Exception as e:
+        # Index might already exist or have conflicts, log and continue
+        logger.warning(f"Could not create compound unique index: {e}")
+    
+    # Create validation schema
+    await db.command({
+        "collMod": "ratingtables",
+        "validator": {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["table_name", "company", "lob", "state", "product", "active", "version", "effective_date", "data", "created_at", "updated_at"],
+                "properties": {
+                    "id": {
+                        "bsonType": "int",
+                        "description": "must be an integer"
+                    },
+                    "table_name": {
+                        "bsonType": "string",
+                        "description": "must be a string and is required"
+                    },
+                    "table_type": {
+                        "bsonType": ["string", "null"],
+                        "description": "must be a string or null (optional)"
+                    },
+                    "active": {
+                        "bsonType": "bool",
+                        "description": "must be a boolean and is required"
+                    },
+                    "version": {
+                        "bsonType": "double",
+                        "description": "must be a float and is required"
+                    },
+                    "effective_date": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "expiration_date": {
+                        "bsonType": ["date", "null"],
+                        "description": "must be a date or null (optional)"
+                    },
+                    "data": {
+                        "bsonType": "array",
+                        "description": "must be an array and is required"
+                    },
+                    "company": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "lob": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "state": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "product": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "context": {
+                        "bsonType": ["int", "null"],
+                        "description": "must be an integer ID or null (optional)"
+                    },
+                    "lookup_config": {
+                        "bsonType": "object",
+                        "description": "must be an object"
+                    },
+                    "ai_metadata": {
+                        "bsonType": "object",
+                        "description": "must be an object"
+                    },
+                    "created_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "updated_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    }
+                }
+            }
+        },
+        "validationLevel": "strict"
+    })
+
+    # Algorithm collection indexes and validations
+    algorithm_collection = db["algorithms"]
+    
+    # Create indexes
+    await algorithm_collection.create_index("id", unique=True)
+    await algorithm_collection.create_index("algorithm_name")
+    await algorithm_collection.create_index("algorithm_type")
+    await algorithm_collection.create_index("active")
+    await algorithm_collection.create_index("company")
+    await algorithm_collection.create_index("lob")
+    await algorithm_collection.create_index("state")
+    await algorithm_collection.create_index("product")
+    await algorithm_collection.create_index("effective_date")
+    await algorithm_collection.create_index("expiration_date")
+    await algorithm_collection.create_index("required_tables")
+    
+    # Create compound unique index for primary unique combination
+    # algorithm_name + company + lob + state + product + effective_date
+    # Partial index: only applies to active records (active: true)
+    try:
+        # Drop existing index with the same name if it exists (to handle specification changes)
+        try:
+            await algorithm_collection.drop_index("unique_combination_idx")
+            logger.info("Dropped existing unique_combination_idx index for algorithms to recreate with updated specification")
+        except Exception as drop_error:
+            # Index doesn't exist or couldn't be dropped, that's fine
+            logger.debug(f"Could not drop existing unique_combination_idx index for algorithms (may not exist): {drop_error}")
+        
+        # Create the new index with partial filter expression
+        await algorithm_collection.create_index(
+            [("algorithm_name", 1), ("company", 1), ("lob", 1), ("state", 1), ("product", 1), ("effective_date", 1)],
+            unique=True,
+            partialFilterExpression={"active": True},
+            name="unique_combination_idx"
+        )
+        logger.info("Created compound unique partial index for algorithm_name+company+lob+state+product+effective_date (active records only)")
+    except Exception as e:
+        # Index might already exist or have conflicts, log and continue
+        logger.warning(f"Could not create compound unique index for algorithms: {e}")
+    
+    # Create validation schema
+    await db.command({
+        "collMod": "algorithms",
+        "validator": {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["algorithm_name", "company", "lob", "state", "product", "active", "version", "effective_date", "required_tables", "formula", "created_at", "updated_at"],
+                "properties": {
+                    "id": {
+                        "bsonType": "int",
+                        "description": "must be an integer"
+                    },
+                    "algorithm_name": {
+                        "bsonType": "string",
+                        "description": "must be a string and is required"
+                    },
+                    "algorithm_type": {
+                        "bsonType": ["string", "null"],
+                        "description": "must be a string or null (optional)"
+                    },
+                    "active": {
+                        "bsonType": "bool",
+                        "description": "must be a boolean and is required"
+                    },
+                    "version": {
+                        "bsonType": "double",
+                        "description": "must be a float and is required"
+                    },
+                    "effective_date": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "expiration_date": {
+                        "bsonType": ["date", "null"],
+                        "description": "must be a date or null (optional)"
+                    },
+                    "required_tables": {
+                        "bsonType": "array",
+                        "description": "must be an array of integers and is required"
+                    },
+                    "formula": {
+                        "bsonType": "object",
+                        "description": "must be an object and is required"
+                    },
+                    "calculation_steps": {
+                        "bsonType": ["array", "null"],
+                        "description": "must be an array or null (optional)"
+                    },
+                    "variables": {
+                        "bsonType": ["object", "null"],
+                        "description": "must be an object or null (optional)"
+                    },
+                    "company": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "lob": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "state": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "product": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "created_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "updated_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    }
+                }
+            }
+        },
+        "validationLevel": "strict"
+    })
+
+    # RatingManual collection indexes and validations
+    ratingmanual_collection = db["ratingmanuals"]
+    
+    # Create indexes
+    await ratingmanual_collection.create_index("id", unique=True)
+    await ratingmanual_collection.create_index("manual_name")
+    await ratingmanual_collection.create_index("active")
+    await ratingmanual_collection.create_index("company")
+    await ratingmanual_collection.create_index("lob")
+    await ratingmanual_collection.create_index("state")
+    await ratingmanual_collection.create_index("product")
+    await ratingmanual_collection.create_index("algorithm")
+    await ratingmanual_collection.create_index("effective_date")
+    await ratingmanual_collection.create_index("expiration_date")
+    await ratingmanual_collection.create_index("priority")
+    
+    # Create compound unique index for primary unique combination
+    # manual_name + company + lob + product + state + effective_date (algorithm excluded to allow versioning on algorithm changes)
+    # Partial index: only applies to active records (active: true)
+    try:
+        # Drop existing index with the same name if it exists (to handle specification changes)
+        try:
+            await ratingmanual_collection.drop_index("unique_ratingmanual_combination_idx")
+            logger.info("Dropped existing unique_ratingmanual_combination_idx index to recreate with updated specification")
+        except Exception as drop_error:
+            # Index doesn't exist or couldn't be dropped, that's fine
+            logger.debug(f"Could not drop existing unique_ratingmanual_combination_idx index (may not exist): {drop_error}")
+        
+        # Create the new index with partial filter expression (algorithm excluded to allow versioning)
+        await ratingmanual_collection.create_index(
+            [("manual_name", 1), ("company", 1), ("lob", 1), ("product", 1), ("state", 1), ("effective_date", 1)],
+            unique=True,
+            partialFilterExpression={"active": True},
+            name="unique_ratingmanual_combination_idx"
+        )
+        logger.info("Created compound unique partial index for manual_name+company+lob+product+state+effective_date (active records only, algorithm excluded for versioning)")
+    except Exception as e:
+        # Index might already exist or have conflicts, log and continue
+        logger.warning(f"Could not create compound unique index for ratingmanuals: {e}")
+    
+    # Create validation schema
+    await db.command({
+        "collMod": "ratingmanuals",
+        "validator": {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["manual_name", "company", "lob", "state", "product", "algorithm", "active", "version", "effective_date", "priority", "created_at", "updated_at"],
+                "properties": {
+                    "id": {
+                        "bsonType": "int",
+                        "description": "must be an integer"
+                    },
+                    "manual_name": {
+                        "bsonType": "string",
+                        "description": "must be a string and is required"
+                    },
+                    "active": {
+                        "bsonType": "bool",
+                        "description": "must be a boolean and is required"
+                    },
+                    "version": {
+                        "bsonType": "double",
+                        "description": "must be a float and is required"
+                    },
+                    "effective_date": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "expiration_date": {
+                        "bsonType": ["date", "null"],
+                        "description": "must be a date or null (optional)"
+                    },
+                    "company": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "lob": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "state": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "product": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "algorithm": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "priority": {
+                        "bsonType": "int",
+                        "description": "must be an integer and is required"
                     },
                     "created_at": {
                         "bsonType": "date",

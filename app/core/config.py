@@ -34,20 +34,31 @@ class Settings(BaseSettings):
     # Database Settings
     # Default connects to MongoDB from Ratings-api docker-compose
     # Override via MONGODB_URL environment variable if needed
-    MONGODB_URL: str = "mongodb://admin:password@localhost:27017/?authSource=admin"
+    MONGODB_URL: str = "mongodb://admin:password@localhost:37017/?authSource=admin"
     MONGODB_DB_NAME: str = "ratings_db"
     DATABASE_NAME: str = "motor_management"
     
     # CORS Settings
     # List of allowed origins. For development, include common frontend ports
     # For production, specify exact origins (e.g., ["https://yourdomain.com"])
+    # Set to ["*"] to allow all origins (not recommended for production)
+    # Can be overridden via BACKEND_CORS_ORIGINS environment variable (comma-separated list)
     BACKEND_CORS_ORIGINS: list = [
         "http://localhost:5173",  # Vite default port
         "http://localhost:3000",  # React default port
         "http://localhost:5174",  # Alternative Vite port
+        "http://localhost:8080",  # Vue CLI default port
+        "http://localhost:8000",  # Common dev server port
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8000",
     ]
+    
+    # Allow all origins for development (set to True to enable, overrides BACKEND_CORS_ORIGINS)
+    # WARNING: Only use in development! Set via CORS_ALLOW_ALL_ORIGINS environment variable
+    CORS_ALLOW_ALL_ORIGINS: bool = False
     
     # Email Settings (for password reset)
     SMTP_HOST: Optional[str] = None
