@@ -64,17 +64,6 @@ async def create_bulk_algorithms(
         logger.error(f"Error creating algorithms: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/{algorithm_id}", response_model=AlgorithmResponseSchema)
-async def get_algorithm(
-    algorithm_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Get an algorithm by ID"""
-    algorithm = await algorithm_service.get_algorithm(algorithm_id)
-    if not algorithm:
-        raise HTTPException(status_code=404, detail="Algorithm not found")
-    return algorithm
-
 @router.get("/", response_model=List[AlgorithmResponseSchema])
 async def get_algorithms(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
@@ -114,47 +103,6 @@ async def get_algorithms(
         sort_by=sort_by,
         sort_order=sort_order
     )
-
-@router.put("/{algorithm_id}", response_model=AlgorithmResponseSchema)
-async def update_algorithm(
-    algorithm_id: int,
-    algorithm_update: AlgorithmUpdateSchema,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Update an algorithm"""
-    try:
-        updated_algorithm = await algorithm_service.update_algorithm(algorithm_id, algorithm_update)
-        if not updated_algorithm:
-            raise HTTPException(status_code=404, detail="Algorithm not found")
-        return updated_algorithm
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error updating algorithm: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@router.delete("/{algorithm_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_algorithm(
-    algorithm_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Delete an algorithm"""
-    try:
-        success = await algorithm_service.delete_algorithm(algorithm_id)
-        if not success:
-            raise HTTPException(status_code=404, detail="Algorithm not found")
-    except Exception as e:
-        logger.error(f"Error deleting algorithm: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@router.get("/{algorithm_id}/exists")
-async def check_algorithm_exists(
-    algorithm_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Check if an algorithm exists"""
-    algorithm = await algorithm_service.get_algorithm(algorithm_id)
-    return {"exists": algorithm is not None}
 
 @router.get("/info/count")
 async def get_algorithms_count(
@@ -197,4 +145,56 @@ async def get_sequence_info(
         "last_algorithm_id": last_id,
         "next_algorithm_id": last_id + 1 if last_id else 100000000
     }
+
+@router.get("/{algorithm_id}/exists")
+async def check_algorithm_exists(
+    algorithm_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Check if an algorithm exists"""
+    algorithm = await algorithm_service.get_algorithm(algorithm_id)
+    return {"exists": algorithm is not None}
+
+@router.get("/{algorithm_id}", response_model=AlgorithmResponseSchema)
+async def get_algorithm(
+    algorithm_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Get an algorithm by ID"""
+    algorithm = await algorithm_service.get_algorithm(algorithm_id)
+    if not algorithm:
+        raise HTTPException(status_code=404, detail="Algorithm not found")
+    return algorithm
+
+@router.put("/{algorithm_id}", response_model=AlgorithmResponseSchema)
+async def update_algorithm(
+    algorithm_id: int,
+    algorithm_update: AlgorithmUpdateSchema,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Update an algorithm"""
+    try:
+        updated_algorithm = await algorithm_service.update_algorithm(algorithm_id, algorithm_update)
+        if not updated_algorithm:
+            raise HTTPException(status_code=404, detail="Algorithm not found")
+        return updated_algorithm
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating algorithm: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.delete("/{algorithm_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_algorithm(
+    algorithm_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Delete an algorithm"""
+    try:
+        success = await algorithm_service.delete_algorithm(algorithm_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Algorithm not found")
+    except Exception as e:
+        logger.error(f"Error deleting algorithm: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 

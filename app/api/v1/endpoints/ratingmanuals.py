@@ -64,17 +64,6 @@ async def create_bulk_ratingmanuals(
         logger.error(f"Error creating rating manuals: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/{ratingmanual_id}", response_model=RatingManualResponseSchema)
-async def get_ratingmanual(
-    ratingmanual_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Get a rating manual by ID"""
-    ratingmanual = await ratingmanual_service.get_ratingmanual(ratingmanual_id)
-    if not ratingmanual:
-        raise HTTPException(status_code=404, detail="Rating manual not found")
-    return ratingmanual
-
 @router.get("/", response_model=List[RatingManualResponseSchema])
 async def get_ratingmanuals(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
@@ -114,47 +103,6 @@ async def get_ratingmanuals(
         sort_by=sort_by,
         sort_order=sort_order
     )
-
-@router.put("/{ratingmanual_id}", response_model=RatingManualResponseSchema)
-async def update_ratingmanual(
-    ratingmanual_id: int,
-    ratingmanual_update: RatingManualUpdateSchema,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Update a rating manual"""
-    try:
-        updated_ratingmanual = await ratingmanual_service.update_ratingmanual(ratingmanual_id, ratingmanual_update)
-        if not updated_ratingmanual:
-            raise HTTPException(status_code=404, detail="Rating manual not found")
-        return updated_ratingmanual
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error updating rating manual: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@router.delete("/{ratingmanual_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_ratingmanual(
-    ratingmanual_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Delete a rating manual"""
-    try:
-        success = await ratingmanual_service.delete_ratingmanual(ratingmanual_id)
-        if not success:
-            raise HTTPException(status_code=404, detail="Rating manual not found")
-    except Exception as e:
-        logger.error(f"Error deleting rating manual: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@router.get("/{ratingmanual_id}/exists")
-async def check_ratingmanual_exists(
-    ratingmanual_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Check if a rating manual exists"""
-    ratingmanual = await ratingmanual_service.get_ratingmanual(ratingmanual_id)
-    return {"exists": ratingmanual is not None}
 
 @router.get("/info/sequence")
 async def get_ratingmanual_sequence_info(
@@ -197,4 +145,56 @@ async def get_ratingmanuals_count(
     
     count = await ratingmanual_service.count_ratingmanuals(filter_by=filter_by)
     return {"count": count}
+
+@router.get("/{ratingmanual_id}/exists")
+async def check_ratingmanual_exists(
+    ratingmanual_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Check if a rating manual exists"""
+    ratingmanual = await ratingmanual_service.get_ratingmanual(ratingmanual_id)
+    return {"exists": ratingmanual is not None}
+
+@router.get("/{ratingmanual_id}", response_model=RatingManualResponseSchema)
+async def get_ratingmanual(
+    ratingmanual_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Get a rating manual by ID"""
+    ratingmanual = await ratingmanual_service.get_ratingmanual(ratingmanual_id)
+    if not ratingmanual:
+        raise HTTPException(status_code=404, detail="Rating manual not found")
+    return ratingmanual
+
+@router.put("/{ratingmanual_id}", response_model=RatingManualResponseSchema)
+async def update_ratingmanual(
+    ratingmanual_id: int,
+    ratingmanual_update: RatingManualUpdateSchema,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Update a rating manual"""
+    try:
+        updated_ratingmanual = await ratingmanual_service.update_ratingmanual(ratingmanual_id, ratingmanual_update)
+        if not updated_ratingmanual:
+            raise HTTPException(status_code=404, detail="Rating manual not found")
+        return updated_ratingmanual
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating rating manual: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.delete("/{ratingmanual_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ratingmanual(
+    ratingmanual_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Delete a rating manual"""
+    try:
+        success = await ratingmanual_service.delete_ratingmanual(ratingmanual_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Rating manual not found")
+    except Exception as e:
+        logger.error(f"Error deleting rating manual: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 

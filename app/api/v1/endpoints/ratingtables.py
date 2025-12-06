@@ -57,17 +57,6 @@ async def create_bulk_ratingtables(
         logger.error(f"Error creating rating tables: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/{ratingtable_id}", response_model=RatingTableResponseSchema)
-async def get_ratingtable(
-    ratingtable_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Get a rating table by ID"""
-    ratingtable = await ratingtable_service.get_ratingtable(ratingtable_id)
-    if not ratingtable:
-        raise HTTPException(status_code=404, detail="Rating table not found")
-    return ratingtable
-
 @router.get("/", response_model=List[RatingTableResponseSchema])
 async def get_ratingtables(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
@@ -92,15 +81,15 @@ async def get_ratingtables(
         filter_by["table_name"] = table_name
     if table_type:
         filter_by["table_type"] = table_type
-    if company_id:
+    if company_id is not None:
         filter_by["company_id"] = company_id
-    if lob_id:
+    if lob_id is not None:
         filter_by["lob_id"] = lob_id
-    if state_id:
+    if state_id is not None:
         filter_by["state_id"] = state_id
-    if product_id:
+    if product_id is not None:
         filter_by["product_id"] = product_id
-    if context_id:
+    if context_id is not None:
         filter_by["context_id"] = context_id
     
     return await ratingtable_service.get_ratingtables(
@@ -110,37 +99,6 @@ async def get_ratingtables(
         sort_by=sort_by,
         sort_order=sort_order
     )
-
-@router.put("/{ratingtable_id}", response_model=RatingTableResponseSchema)
-async def update_ratingtable(
-    ratingtable_id: int,
-    ratingtable_update: RatingTableUpdateSchema,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Update a rating table"""
-    updated_ratingtable = await ratingtable_service.update_ratingtable(ratingtable_id, ratingtable_update)
-    if not updated_ratingtable:
-        raise HTTPException(status_code=404, detail="Rating table not found")
-    return updated_ratingtable
-
-@router.delete("/{ratingtable_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_ratingtable(
-    ratingtable_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Delete a rating table"""
-    success = await ratingtable_service.delete_ratingtable(ratingtable_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Rating table not found")
-
-@router.get("/{ratingtable_id}/exists")
-async def check_ratingtable_exists(
-    ratingtable_id: int,
-    current_user: UserBase = Depends(get_current_user)
-):
-    """Check if a rating table exists"""
-    ratingtable = await ratingtable_service.get_ratingtable(ratingtable_id)
-    return {"exists": ratingtable is not None}
 
 @router.get("/info/sequence")
 async def get_sequence_info(
@@ -173,19 +131,61 @@ async def get_ratingtables_count(
         filter_by["table_name"] = table_name
     if table_type:
         filter_by["table_type"] = table_type
-    if company_id:
+    if company_id is not None:
         filter_by["company_id"] = company_id
-    if lob_id:
+    if lob_id is not None:
         filter_by["lob_id"] = lob_id
-    if state_id:
+    if state_id is not None:
         filter_by["state_id"] = state_id
-    if product_id:
+    if product_id is not None:
         filter_by["product_id"] = product_id
-    if context_id:
+    if context_id is not None:
         filter_by["context_id"] = context_id
     
     count = await ratingtable_service.count_ratingtables(filter_by=filter_by)
     return {"count": count}
+
+@router.get("/{ratingtable_id}/exists")
+async def check_ratingtable_exists(
+    ratingtable_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Check if a rating table exists"""
+    ratingtable = await ratingtable_service.get_ratingtable(ratingtable_id)
+    return {"exists": ratingtable is not None}
+
+@router.get("/{ratingtable_id}", response_model=RatingTableResponseSchema)
+async def get_ratingtable(
+    ratingtable_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Get a rating table by ID"""
+    ratingtable = await ratingtable_service.get_ratingtable(ratingtable_id)
+    if not ratingtable:
+        raise HTTPException(status_code=404, detail="Rating table not found")
+    return ratingtable
+
+@router.put("/{ratingtable_id}", response_model=RatingTableResponseSchema)
+async def update_ratingtable(
+    ratingtable_id: int,
+    ratingtable_update: RatingTableUpdateSchema,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Update a rating table"""
+    updated_ratingtable = await ratingtable_service.update_ratingtable(ratingtable_id, ratingtable_update)
+    if not updated_ratingtable:
+        raise HTTPException(status_code=404, detail="Rating table not found")
+    return updated_ratingtable
+
+@router.delete("/{ratingtable_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ratingtable(
+    ratingtable_id: int,
+    current_user: UserBase = Depends(get_current_user)
+):
+    """Delete a rating table"""
+    success = await ratingtable_service.delete_ratingtable(ratingtable_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Rating table not found")
 
 @router.post("/import/excel", status_code=status.HTTP_200_OK)
 async def import_ratingtables_from_excel(

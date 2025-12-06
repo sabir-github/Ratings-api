@@ -737,6 +737,79 @@ async def create_indexes_and_validations():
             # Index doesn't exist or couldn't be dropped, that's fine
             logger.debug(f"Could not drop existing unique_ratingmanual_combination_idx index (may not exist): {drop_error}")
         
+        # Before creating unique index, handle any duplicate records
+        # Find all active records grouped by the unique combination
+        from datetime import datetime, timezone, timedelta
+        pipeline = [
+            {"$match": {"active": True}},
+            {
+                "$group": {
+                    "_id": {
+                        "manual_name": "$manual_name",
+                        "company": "$company",
+                        "lob": "$lob",
+                        "product": "$product",
+                        "state": "$state",
+                        "effective_date": "$effective_date"
+                    },
+                    "records": {
+                        "$push": {
+                            "id": "$id",
+                            "version": "$version",
+                            "created_at": "$created_at"
+                        }
+                    },
+                    "count": {"$sum": 1}
+                }
+            },
+            {"$match": {"count": {"$gt": 1}}}
+        ]
+        
+        duplicate_groups = await ratingmanual_collection.aggregate(pipeline).to_list(length=None)
+        
+        if duplicate_groups:
+            logger.warning(f"Found {len(duplicate_groups)} duplicate groups in ratingmanuals collection. Cleaning up duplicates...")
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_minus_one = today - timedelta(days=1)
+            now = datetime.now(timezone.utc)
+            
+            total_expired = 0
+            for group in duplicate_groups:
+                records = group["records"]
+                # Sort by version (descending) and created_at (descending) to keep the most recent/highest version
+                # Handle datetime objects properly - MongoDB returns datetime objects
+                def sort_key(record):
+                    version = record.get("version", 1.0)
+                    created_at = record.get("created_at")
+                    # If created_at is a datetime, use it; otherwise use min datetime
+                    if isinstance(created_at, datetime):
+                        created_at_val = created_at
+                    else:
+                        created_at_val = datetime.min.replace(tzinfo=timezone.utc)
+                    return (version, created_at_val)
+                
+                records.sort(key=sort_key, reverse=True)
+                
+                # Keep the first record (highest version, most recent), expire the rest
+                keep_id = records[0]["id"]
+                expire_ids = [r["id"] for r in records[1:]]
+                
+                if expire_ids:
+                    result = await ratingmanual_collection.update_many(
+                        {"id": {"$in": expire_ids}},
+                        {
+                            "$set": {
+                                "active": False,
+                                "expiration_date": today_minus_one,
+                                "updated_at": now
+                            }
+                        }
+                    )
+                    total_expired += result.modified_count
+                    logger.info(f"Expired {len(expire_ids)} duplicate rating manual records (keeping id {keep_id})")
+            
+            logger.info(f"Cleaned up duplicate rating manual records. Kept {len(duplicate_groups)} records, expired {total_expired} duplicates")
+        
         # Create the new index with partial filter expression (algorithm excluded to allow versioning)
         await ratingmanual_collection.create_index(
             [("manual_name", 1), ("company", 1), ("lob", 1), ("product", 1), ("state", 1), ("effective_date", 1)],
@@ -746,8 +819,87 @@ async def create_indexes_and_validations():
         )
         logger.info("Created compound unique partial index for manual_name+company+lob+product+state+effective_date (active records only, algorithm excluded for versioning)")
     except Exception as e:
-        # Index might already exist or have conflicts, log and continue
-        logger.warning(f"Could not create compound unique index for ratingmanuals: {e}")
+        # Check if it's a duplicate key error and try to clean up
+        if "duplicate key" in str(e).lower() or "E11000" in str(e):
+            logger.warning(f"Duplicate key error when creating index. Attempting to clean up duplicates and retry...")
+            try:
+                # Try to clean up duplicates more aggressively
+                from datetime import datetime, timezone, timedelta
+                today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                today_minus_one = today - timedelta(days=1)
+                
+                # Find and expire all but the most recent record for each combination
+                pipeline = [
+                    {"$match": {"active": True}},
+                    {
+                        "$group": {
+                            "_id": {
+                                "manual_name": "$manual_name",
+                                "company": "$company",
+                                "lob": "$lob",
+                                "product": "$product",
+                                "state": "$state",
+                                "effective_date": "$effective_date"
+                            },
+                            "records": {"$push": {"id": "$id", "version": "$version", "created_at": "$created_at"}},
+                            "count": {"$sum": 1}
+                        }
+                    },
+                    {"$match": {"count": {"$gt": 1}}}
+                ]
+                
+                duplicate_groups = await ratingmanual_collection.aggregate(pipeline).to_list(length=None)
+                
+                total_expired = 0
+                for group in duplicate_groups:
+                    records = group["records"]
+                    # Sort by version (descending) and created_at (descending)
+                    def sort_key(record):
+                        version = record.get("version", 1.0)
+                        created_at = record.get("created_at")
+                        # If created_at is a datetime, use it; otherwise use min datetime
+                        if isinstance(created_at, datetime):
+                            created_at_val = created_at
+                        else:
+                            created_at_val = datetime.min.replace(tzinfo=timezone.utc)
+                        return (version, created_at_val)
+                    
+                    records.sort(key=sort_key, reverse=True)
+                    
+                    # Keep the first record, expire the rest
+                    keep_id = records[0]["id"]
+                    expire_ids = [r["id"] for r in records[1:]]
+                    
+                    if expire_ids:
+                        result = await ratingmanual_collection.update_many(
+                            {"id": {"$in": expire_ids}},
+                            {
+                                "$set": {
+                                    "active": False,
+                                    "expiration_date": today_minus_one,
+                                    "updated_at": datetime.now(timezone.utc)
+                                }
+                            }
+                        )
+                        total_expired += result.modified_count
+                        logger.info(f"Expired {len(expire_ids)} duplicate rating manual records (keeping id {keep_id})")
+                
+                logger.info(f"Retry cleanup: Expired {total_expired} duplicate rating manual records")
+                
+                # Retry creating the index
+                await ratingmanual_collection.create_index(
+                    [("manual_name", 1), ("company", 1), ("lob", 1), ("product", 1), ("state", 1), ("effective_date", 1)],
+                    unique=True,
+                    partialFilterExpression={"active": True},
+                    name="unique_ratingmanual_combination_idx"
+                )
+                logger.info("Successfully created compound unique partial index for ratingmanuals after cleaning duplicates")
+            except Exception as retry_error:
+                logger.error(f"Failed to create compound unique index for ratingmanuals even after cleanup: {retry_error}")
+                logger.warning(f"Index creation failed. Manual cleanup may be required. Error: {e}")
+        else:
+            # Index might already exist or have other conflicts, log and continue
+            logger.warning(f"Could not create compound unique index for ratingmanuals: {e}")
     
     # Create validation schema
     await db.command({
