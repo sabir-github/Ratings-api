@@ -720,13 +720,13 @@ async def create_indexes_and_validations():
     await ratingmanual_collection.create_index("lob")
     await ratingmanual_collection.create_index("state")
     await ratingmanual_collection.create_index("product")
-    await ratingmanual_collection.create_index("algorithm")
+    await ratingmanual_collection.create_index("ratingtable")
     await ratingmanual_collection.create_index("effective_date")
     await ratingmanual_collection.create_index("expiration_date")
     await ratingmanual_collection.create_index("priority")
     
     # Create compound unique index for primary unique combination
-    # manual_name + company + lob + product + state + effective_date (algorithm excluded to allow versioning on algorithm changes)
+    # manual_name + company + lob + product + state + effective_date (ratingtable excluded to allow versioning on ratingtable changes)
     # Partial index: only applies to active records (active: true)
     try:
         # Drop existing index with the same name if it exists (to handle specification changes)
@@ -810,14 +810,14 @@ async def create_indexes_and_validations():
             
             logger.info(f"Cleaned up duplicate rating manual records. Kept {len(duplicate_groups)} records, expired {total_expired} duplicates")
         
-        # Create the new index with partial filter expression (algorithm excluded to allow versioning)
+        # Create the new index with partial filter expression (ratingtable excluded to allow versioning)
         await ratingmanual_collection.create_index(
             [("manual_name", 1), ("company", 1), ("lob", 1), ("product", 1), ("state", 1), ("effective_date", 1)],
             unique=True,
             partialFilterExpression={"active": True},
             name="unique_ratingmanual_combination_idx"
         )
-        logger.info("Created compound unique partial index for manual_name+company+lob+product+state+effective_date (active records only, algorithm excluded for versioning)")
+        logger.info("Created compound unique partial index for manual_name+company+lob+product+state+effective_date (active records only, ratingtable excluded for versioning)")
     except Exception as e:
         # Check if it's a duplicate key error and try to clean up
         if "duplicate key" in str(e).lower() or "E11000" in str(e):
@@ -907,7 +907,7 @@ async def create_indexes_and_validations():
         "validator": {
             "$jsonSchema": {
                 "bsonType": "object",
-                "required": ["manual_name", "company", "lob", "state", "product", "algorithm", "active", "version", "effective_date", "priority", "created_at", "updated_at"],
+                "required": ["manual_name", "company", "lob", "state", "product", "ratingtable", "active", "version", "effective_date", "priority", "created_at", "updated_at"],
                 "properties": {
                     "id": {
                         "bsonType": "int",
@@ -949,9 +949,12 @@ async def create_indexes_and_validations():
                         "bsonType": "int",
                         "description": "must be an integer ID and is required"
                     },
-                    "algorithm": {
-                        "bsonType": "int",
-                        "description": "must be an integer ID and is required"
+                    "ratingtable": {
+                        "bsonType": "array",
+                        "items": {
+                            "bsonType": "int"
+                        },
+                        "description": "must be an array of integer IDs and is required"
                     },
                     "priority": {
                         "bsonType": "int",

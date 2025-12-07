@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from bson import ObjectId
 
@@ -28,7 +28,7 @@ class RatingManualBase(BaseModel):
     lob: int = Field(..., description="Lob ID")
     state: int = Field(..., description="State ID")
     product: int = Field(..., description="Product ID")
-    algorithm: int = Field(..., description="Algorithm ID")
+    ratingtable: List[int] = Field(..., description="List of Rating Table IDs")
     priority: int = Field(..., description="Priority")
 
 class RatingManualCreate(RatingManualBase):

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
 from app.services.ratingmanual_service import ratingmanual_service
 from app.schemas.ratingmanual import RatingManualCreateSchema, RatingManualUpdateSchema, RatingManualResponseSchema
 from app.core.security import get_current_user
@@ -17,7 +18,7 @@ async def create_ratingmanual(
     current_user: UserBase = Depends(get_current_user)
 ):
     """Create a new rating manual (ID auto-generated if not provided)
-    Returns message if no algorithm changes found, or creates new record with algorithm comparison if changes exist"""
+    Returns message if no ratingtable changes found, or creates new record with ratingtable comparison if changes exist"""
     try:
         result = await ratingmanual_service.create_ratingmanual(ratingmanual)
         # If no changes found, return 200 with message
@@ -43,7 +44,7 @@ async def create_bulk_ratingmanuals(
     current_user: UserBase = Depends(get_current_user)
 ):
     """Bulk create new rating manuals (IDs auto-generated if not provided)
-    Returns list of results with algorithm comparison for each record"""
+    Returns list of results with ratingtable comparison for each record"""
     try:
         results = await ratingmanual_service.bulk_create_ratingmanuals(ratingmanuals)
         # Determine overall status code
@@ -74,7 +75,8 @@ async def get_ratingmanuals(
     lob_id: Optional[int] = Query(None, description="Filter by LOB ID"),
     state_id: Optional[int] = Query(None, description="Filter by State ID"),
     product_id: Optional[int] = Query(None, description="Filter by Product ID"),
-    algorithm_id: Optional[int] = Query(None, description="Filter by Algorithm ID"),
+    ratingtable_id: Optional[int] = Query(None, description="Filter by Rating Table ID"),
+    effective_date: Optional[datetime] = Query(None, description="Filter by effective date (matches records with this exact date)"),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: int = Query(1, ge=-1, le=1, description="Sort order (1 for ascending, -1 for descending)"),
     current_user: UserBase = Depends(get_current_user)
@@ -93,8 +95,14 @@ async def get_ratingmanuals(
         filter_by["state_id"] = state_id
     if product_id is not None:
         filter_by["product_id"] = product_id
-    if algorithm_id is not None:
-        filter_by["algorithm_id"] = algorithm_id
+    if ratingtable_id is not None:
+        filter_by["ratingtable_id"] = ratingtable_id
+    if effective_date is not None:
+        # Normalize to start of day (midnight) to match how dates are stored
+        normalized_date = effective_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        if normalized_date.tzinfo is None:
+            normalized_date = normalized_date.replace(tzinfo=timezone.utc)
+        filter_by["effective_date"] = normalized_date
     
     return await ratingmanual_service.get_ratingmanuals(
         skip=skip,
@@ -123,7 +131,8 @@ async def get_ratingmanuals_count(
     lob_id: Optional[int] = Query(None, description="Filter by LOB ID"),
     state_id: Optional[int] = Query(None, description="Filter by State ID"),
     product_id: Optional[int] = Query(None, description="Filter by Product ID"),
-    algorithm_id: Optional[int] = Query(None, description="Filter by Algorithm ID"),
+    ratingtable_id: Optional[int] = Query(None, description="Filter by Rating Table ID"),
+    effective_date: Optional[datetime] = Query(None, description="Filter by effective date (matches records with this exact date)"),
     current_user: UserBase = Depends(get_current_user)
 ):
     """Get count of rating manuals with optional filters"""
@@ -140,8 +149,14 @@ async def get_ratingmanuals_count(
         filter_by["state_id"] = state_id
     if product_id is not None:
         filter_by["product_id"] = product_id
-    if algorithm_id is not None:
-        filter_by["algorithm_id"] = algorithm_id
+    if ratingtable_id is not None:
+        filter_by["ratingtable_id"] = ratingtable_id
+    if effective_date is not None:
+        # Normalize to start of day (midnight) to match how dates are stored
+        normalized_date = effective_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        if normalized_date.tzinfo is None:
+            normalized_date = normalized_date.replace(tzinfo=timezone.utc)
+        filter_by["effective_date"] = normalized_date
     
     count = await ratingmanual_service.count_ratingmanuals(filter_by=filter_by)
     return {"count": count}

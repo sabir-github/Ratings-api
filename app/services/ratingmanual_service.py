@@ -9,7 +9,7 @@ from app.services.company_service import company_service
 from app.services.lob_service import lob_service
 from app.services.state_service import state_service
 from app.services.product_service import product_service
-from app.services.algorithm_service import algorithm_service
+from app.services.ratingtable_service import ratingtable_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ class RatingManualService:
             logger.warning(f"Could not determine transaction support, assuming not supported: {e}")
             return False
 
-    async def _validate_associations(self, company: int, lob: int, state: int, product: int, algorithm: int):
+    async def _validate_associations(self, company: int, lob: int, state: int, product: int, ratingtables: List[int]):
         """Validate that all associated entities exist by id"""
         if not isinstance(company, int) or company <= 0:
             raise ValueError("Company must be a positive integer ID")
@@ -73,11 +73,14 @@ class RatingManualService:
         if not product_obj:
             raise ValueError(f"Product with id {product} does not exist")
         
-        if not isinstance(algorithm, int) or algorithm <= 0:
-            raise ValueError("Algorithm must be a positive integer ID")
-        algorithm_obj = await algorithm_service.get_algorithm(algorithm)
-        if not algorithm_obj:
-            raise ValueError(f"Algorithm with id {algorithm} does not exist")
+        if not isinstance(ratingtables, list) or len(ratingtables) == 0:
+            raise ValueError("Rating tables must be a non-empty list")
+        for ratingtable_id in ratingtables:
+            if not isinstance(ratingtable_id, int) or ratingtable_id <= 0:
+                raise ValueError(f"Rating table ID {ratingtable_id} must be a positive integer")
+            ratingtable_obj = await ratingtable_service.get_ratingtable(ratingtable_id)
+            if not ratingtable_obj:
+                raise ValueError(f"Rating table with id {ratingtable_id} does not exist")
 
     def _serialize_datetime(self, obj: Any) -> Any:
         """Recursively convert datetime objects to ISO format strings for JSON serialization"""
@@ -89,18 +92,21 @@ class RatingManualService:
             return [self._serialize_datetime(elem) for elem in obj]
         return obj
 
-    def _compare_algorithm(self, existing_algorithm: int, new_algorithm: int) -> Dict[str, Any]:
-        """Compare algorithm IDs and return comparison result"""
-        has_changes = existing_algorithm != new_algorithm
+    def _compare_ratingtable(self, existing_ratingtables: List[int], new_ratingtables: List[int]) -> Dict[str, Any]:
+        """Compare rating table ID lists and return comparison result"""
+        # Sort lists for comparison to handle order differences
+        existing_sorted = sorted(existing_ratingtables) if existing_ratingtables else []
+        new_sorted = sorted(new_ratingtables) if new_ratingtables else []
+        has_changes = existing_sorted != new_sorted
         
         return {
             "has_changes": has_changes,
-            "existing_algorithm": existing_algorithm,
-            "new_algorithm": new_algorithm
+            "existing_ratingtable": existing_ratingtables,
+            "new_ratingtable": new_ratingtables
         }
 
     async def create_ratingmanual(self, ratingmanual_data: RatingManualCreateSchema) -> Dict[str, Any]:
-        """Create a new rating manual with algorithm comparison using transaction if available"""
+        """Create a new rating manual with ratingtable comparison using transaction if available"""
         collection = await self.get_collection()
         
         # Validate associations first
@@ -109,7 +115,7 @@ class RatingManualService:
             ratingmanual_data.lob,
             ratingmanual_data.state,
             ratingmanual_data.product,
-            ratingmanual_data.algorithm
+            ratingmanual_data.ratingtable
         )
         
         now = datetime.now(timezone.utc)
@@ -133,7 +139,7 @@ class RatingManualService:
         
         # Initialize variables
         existing_manual = None
-        algorithm_comparison = None
+        ratingtable_comparison = None
         new_version = None
         result = None
         expired_id = None
@@ -145,7 +151,7 @@ class RatingManualService:
                     async with await client.start_session() as session:
                         try:
                             async with session.start_transaction():
-                                existing_manual, algorithm_comparison, new_version, result = await self._create_ratingmanual_in_transaction(
+                                existing_manual, ratingtable_comparison, new_version, result = await self._create_ratingmanual_in_transaction(
                                     collection, ratingmanual_data, effective_date, ratingmanual_id, now, session
                                 )
                         except PyMongoError as e:
@@ -153,7 +159,7 @@ class RatingManualService:
                                 logger.warning("Transactions not supported, falling back to non-transactional mode")
                                 self._transactions_supported = False
                                 use_transactions = False
-                                existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
+                                existing_manual, ratingtable_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
                                     collection, ratingmanual_data, effective_date, ratingmanual_id, now
                                 )
                             else:
@@ -166,13 +172,13 @@ class RatingManualService:
                     if e.code == 20:  # IllegalOperation
                         logger.warning("Transactions not supported, falling back to non-transactional mode")
                         self._transactions_supported = False
-                        existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
+                        existing_manual, ratingtable_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
                             collection, ratingmanual_data, effective_date, ratingmanual_id, now
                         )
                     else:
                         raise
             else:
-                existing_manual, priority_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
+                existing_manual, ratingtable_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
                     collection, ratingmanual_data, effective_date, ratingmanual_id, now
                 )
                 
@@ -204,10 +210,10 @@ class RatingManualService:
         
         if result is None:
             return {
-                "message": "No changes found in algorithm field. Record with same combination already exists.",
+                "message": "No changes found in ratingtable field. Record with same combination already exists.",
                 "existing_record_id": existing_manual["id"] if existing_manual else None,
                 "existing_version": existing_manual.get("version", 1.0) if existing_manual else None,
-                "algorithm_comparison": algorithm_comparison
+                "ratingtable_comparison": ratingtable_comparison
             }
 
         # Fetch the created record
@@ -222,15 +228,15 @@ class RatingManualService:
         had_existing = existing_manual is not None
         
         return {
-            "message": "Rating manual created successfully with algorithm changes" if had_existing else "Rating manual created successfully",
+            "message": "Rating manual created successfully with ratingtable changes" if had_existing else "Rating manual created successfully",
             "rating_manual": rating_manual_dict,
-            "algorithm_comparison": algorithm_comparison,
+            "ratingtable_comparison": ratingtable_comparison,
             "version": new_version
         }
     
     async def _create_ratingmanual_in_transaction(self, collection, ratingmanual_data, effective_date, ratingmanual_id, now, session):
         """Helper method for transactional create operation"""
-        # Check for existing record with same combination (excluding algorithm)
+        # Check for existing record with same combination (excluding ratingtable)
         existing_manual = await collection.find_one(
             {
                 "manual_name": ratingmanual_data.manual_name,
@@ -245,13 +251,13 @@ class RatingManualService:
         )
         
         if existing_manual:
-            existing_algorithm = existing_manual.get("algorithm")
-            new_algorithm = ratingmanual_data.algorithm
-            algorithm_comparison = self._compare_algorithm(existing_algorithm, new_algorithm)
+            existing_ratingtable = existing_manual.get("ratingtable")
+            new_ratingtable = ratingmanual_data.ratingtable
+            ratingtable_comparison = self._compare_ratingtable(existing_ratingtable, new_ratingtable)
             
-            if not algorithm_comparison["has_changes"]:
+            if not ratingtable_comparison["has_changes"]:
                 await session.abort_transaction()
-                return existing_manual, algorithm_comparison, None, None
+                return existing_manual, ratingtable_comparison, None, None
             
             today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             today_minus_one = today - timedelta(days=1)
@@ -266,14 +272,14 @@ class RatingManualService:
                 },
                 session=session
             )
-            logger.info(f"Expired existing rating manual with id {existing_manual['id']} due to algorithm changes")
+            logger.info(f"Expired existing rating manual with id {existing_manual['id']} due to ratingtable changes")
             new_version = existing_manual.get("version", 1.0) + 1.0
         else:
             new_version = ratingmanual_data.version if ratingmanual_data.version is not None else 1.0
-            algorithm_comparison = {
+            ratingtable_comparison = {
                 "has_changes": True,
-                "existing_algorithm": None,
-                "new_algorithm": ratingmanual_data.algorithm
+                "existing_ratingtable": None,
+                "new_ratingtable": ratingmanual_data.ratingtable
             }
         
         id_check = await collection.find_one({"id": ratingmanual_id}, session=session)
@@ -291,11 +297,11 @@ class RatingManualService:
         })
         
         result = await collection.insert_one(ratingmanual_dict, session=session)
-        return existing_manual, algorithm_comparison, new_version, result
+        return existing_manual, ratingtable_comparison, new_version, result
     
     async def _create_ratingmanual_without_transaction(self, collection, ratingmanual_data, effective_date, ratingmanual_id, now):
         """Helper method for non-transactional create operation with error handling"""
-        # Check for existing record with same combination (excluding algorithm)
+        # Check for existing record with same combination (excluding ratingtable)
         existing_manual = await collection.find_one({
             "manual_name": ratingmanual_data.manual_name,
             "company": ratingmanual_data.company,
@@ -309,12 +315,12 @@ class RatingManualService:
         expired_id = None
         
         if existing_manual:
-            existing_algorithm = existing_manual.get("algorithm")
-            new_algorithm = ratingmanual_data.algorithm
-            algorithm_comparison = self._compare_algorithm(existing_algorithm, new_algorithm)
+            existing_ratingtable = existing_manual.get("ratingtable")
+            new_ratingtable = ratingmanual_data.ratingtable
+            ratingtable_comparison = self._compare_ratingtable(existing_ratingtable, new_ratingtable)
             
-            if not algorithm_comparison["has_changes"]:
-                return existing_manual, algorithm_comparison, None, None, None
+            if not ratingtable_comparison["has_changes"]:
+                return existing_manual, ratingtable_comparison, None, None, None
             
             today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             today_minus_one = today - timedelta(days=1)
@@ -329,14 +335,14 @@ class RatingManualService:
                 }
             )
             expired_id = existing_manual["id"]
-            logger.info(f"Expired existing rating manual with id {expired_id} due to algorithm changes")
+            logger.info(f"Expired existing rating manual with id {expired_id} due to ratingtable changes")
             new_version = existing_manual.get("version", 1.0) + 1.0
         else:
             new_version = ratingmanual_data.version if ratingmanual_data.version is not None else 1.0
-            algorithm_comparison = {
+            ratingtable_comparison = {
                 "has_changes": True,
-                "existing_algorithm": None,
-                "new_algorithm": ratingmanual_data.algorithm
+                "existing_ratingtable": None,
+                "new_ratingtable": ratingmanual_data.ratingtable
             }
         
         id_check = await collection.find_one({"id": ratingmanual_id})
@@ -353,7 +359,7 @@ class RatingManualService:
         })
         
         result = await collection.insert_one(ratingmanual_dict)
-        return existing_manual, algorithm_comparison, new_version, result, expired_id
+        return existing_manual, ratingtable_comparison, new_version, result, expired_id
 
     async def get_ratingmanual(self, ratingmanual_id: int) -> Optional[RatingManualResponseSchema]:
         """Get a rating manual by ID"""
@@ -386,8 +392,11 @@ class RatingManualService:
                 query["state"] = filter_by["state_id"]
             if "product_id" in filter_by:
                 query["product"] = filter_by["product_id"]
-            if "algorithm_id" in filter_by:
-                query["algorithm"] = filter_by["algorithm_id"]
+            if "ratingtable_id" in filter_by:
+                # Filter by ratingtable_id - MongoDB will check if the value is in the ratingtable array
+                query["ratingtable"] = filter_by["ratingtable_id"]
+            if "effective_date" in filter_by:
+                query["effective_date"] = filter_by["effective_date"]
         
         sort = []
         if sort_by:
@@ -576,13 +585,16 @@ class RatingManualService:
                 query["state"] = filter_by["state_id"]
             if "product_id" in filter_by:
                 query["product"] = filter_by["product_id"]
-            if "algorithm_id" in filter_by:
-                query["algorithm"] = filter_by["algorithm_id"]
+            if "ratingtable_id" in filter_by:
+                # Filter by ratingtable_id - MongoDB will check if the value is in the ratingtable array
+                query["ratingtable"] = filter_by["ratingtable_id"]
+            if "effective_date" in filter_by:
+                query["effective_date"] = filter_by["effective_date"]
         
         return await collection.count_documents(query)
 
     async def bulk_create_ratingmanuals(self, ratingmanuals_data: List[RatingManualCreateSchema]) -> List[Dict[str, Any]]:
-        """Bulk create rating manuals with algorithm comparison using transactions if available"""
+        """Bulk create rating manuals with ratingtable comparison using transactions if available"""
         collection = await self.get_collection()
         now = datetime.now(timezone.utc)
         
@@ -591,7 +603,7 @@ class RatingManualService:
 
         for ratingmanual_data in ratingmanuals_data:
             existing_manual = None
-            algorithm_comparison = None
+            ratingtable_comparison = None
             new_version = None
             result = None
             expired_id = None
@@ -602,7 +614,7 @@ class RatingManualService:
                     ratingmanual_data.lob,
                     ratingmanual_data.state,
                     ratingmanual_data.product,
-                    ratingmanual_data.algorithm
+                    ratingmanual_data.ratingtable
                 )
                 
                 if ratingmanual_data.effective_date is not None:
@@ -623,7 +635,7 @@ class RatingManualService:
                         async with await client.start_session() as session:
                             try:
                                 async with session.start_transaction():
-                                    existing_manual, algorithm_comparison, new_version, result = await self._create_ratingmanual_in_transaction(
+                                    existing_manual, ratingtable_comparison, new_version, result = await self._create_ratingmanual_in_transaction(
                                         collection, ratingmanual_data, effective_date, ratingmanual_id, now, session
                                     )
                             except PyMongoError as e:
@@ -631,7 +643,7 @@ class RatingManualService:
                                     logger.warning(f"Transactions not supported for record (ID: {ratingmanual_id}), falling back to non-transactional mode")
                                     self._transactions_supported = False
                                     use_transactions = False
-                                    existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
+                                    existing_manual, ratingtable_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
                                         collection, ratingmanual_data, effective_date, ratingmanual_id, now
                                     )
                                 else:
@@ -645,7 +657,7 @@ class RatingManualService:
                             logger.warning(f"Transactions not supported for record (ID: {ratingmanual_id}), falling back to non-transactional mode")
                             self._transactions_supported = False
                             use_transactions = False
-                            existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
+                            existing_manual, ratingtable_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
                                 collection, ratingmanual_data, effective_date, ratingmanual_id, now
                             )
                         else:
@@ -654,7 +666,7 @@ class RatingManualService:
                         logger.error(f"Error processing rating manual (ID: {ratingmanual_id}): {e}")
                         raise
                 else:
-                    existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
+                    existing_manual, ratingtable_comparison, new_version, result, expired_id = await self._create_ratingmanual_without_transaction(
                         collection, ratingmanual_data, effective_date, ratingmanual_id, now
                     )
                     
@@ -698,10 +710,10 @@ class RatingManualService:
                         logger.error(f"Failed to rollback ratingmanual_id sequence: {rollback_error}")
                 
                 results.append({
-                    "message": "No changes found in algorithm field. Record with same combination already exists.",
+                    "message": "No changes found in ratingtable field. Record with same combination already exists.",
                     "existing_record_id": existing_manual["id"],
                     "existing_version": existing_manual.get("version", 1.0),
-                    "algorithm_comparison": algorithm_comparison,
+                    "ratingtable_comparison": ratingtable_comparison,
                     "skipped": True
                 })
                 continue
@@ -719,9 +731,9 @@ class RatingManualService:
             rating_manual_dict = self._serialize_datetime(rating_manual_dict)
             
             results.append({
-                "message": "Rating manual created successfully with algorithm changes" if existing_manual else "Rating manual created successfully",
+                "message": "Rating manual created successfully with ratingtable changes" if existing_manual else "Rating manual created successfully",
                 "rating_manual": rating_manual_dict,
-                "algorithm_comparison": algorithm_comparison,
+                "ratingtable_comparison": ratingtable_comparison,
                 "version": new_version,
                 "created": True
             })

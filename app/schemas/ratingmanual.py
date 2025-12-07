@@ -1,5 +1,5 @@
 from pydantic import BaseModel, validator, model_validator, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class RatingManualCreateSchema(BaseModel):
@@ -13,7 +13,7 @@ class RatingManualCreateSchema(BaseModel):
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
-    algorithm: int = Field(..., description="Algorithm ID (mandatory)")
+    ratingtable: List[int] = Field(..., description="List of Rating Table IDs (mandatory)")
     priority: int = Field(..., description="Priority (mandatory)")
 
     @validator('manual_name')
@@ -24,10 +24,23 @@ class RatingManualCreateSchema(BaseModel):
             raise ValueError('Manual name cannot exceed 200 characters')
         return v.strip()
     
-    @validator('company', 'lob', 'state', 'product', 'algorithm')
+    @validator('company', 'lob', 'state', 'product')
     def validate_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
+        return v
+    
+    @validator('ratingtable')
+    def validate_ratingtable(cls, v):
+        if v is None:
+            raise ValueError('Rating tables cannot be None')
+        if not isinstance(v, list):
+            raise ValueError('Rating tables must be a list')
+        if len(v) == 0:
+            raise ValueError('Rating tables list cannot be empty')
+        for table_id in v:
+            if not isinstance(table_id, int) or table_id <= 0:
+                raise ValueError('All rating table IDs must be positive integers')
         return v
     
     @validator('priority')
@@ -80,7 +93,7 @@ class RatingManualResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
-    algorithm: int
+    ratingtable: List[int]
     priority: int
     created_at: datetime
     updated_at: datetime
