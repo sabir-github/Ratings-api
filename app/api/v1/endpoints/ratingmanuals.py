@@ -65,7 +65,8 @@ async def create_bulk_ratingmanuals(
         logger.error(f"Error creating rating manuals: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/", response_model=List[RatingManualResponseSchema])
+@router.get("", response_model=List[RatingManualResponseSchema], include_in_schema=True)
+@router.get("/", response_model=List[RatingManualResponseSchema], include_in_schema=False)
 async def get_ratingmanuals(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of records to return"),
