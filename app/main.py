@@ -44,6 +44,7 @@ if allow_all_origins:
         expose_headers=["*"],
         max_age=3600,
     )
+    logger.info(f"CORS: Configured to allow all origins (development mode)")
 else:
     # Use specific origins with credentials enabled
     # Filter out "*" if present with other origins
@@ -57,6 +58,7 @@ else:
         expose_headers=["*"],
         max_age=3600,
     )
+    logger.info(f"CORS: Configured to allow specific origins: {cors_origins}")
 
 # Database events
 @app.on_event("startup")

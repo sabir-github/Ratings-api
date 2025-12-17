@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     
     # Allow all origins for development (set to True to enable, overrides BACKEND_CORS_ORIGINS)
     # WARNING: Only use in development! Set via CORS_ALLOW_ALL_ORIGINS environment variable
-    CORS_ALLOW_ALL_ORIGINS: bool = False
+    CORS_ALLOW_ALL_ORIGINS: bool = True  # Set to True for development
     
     # Email Settings (for password reset)
     SMTP_HOST: Optional[str] = None

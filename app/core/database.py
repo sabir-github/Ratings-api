@@ -175,6 +175,15 @@ async def create_counter_collection():
                 "sequence_value": 100000000
             })
             logger.info("Created ratingmanual_id counter with initial value 100000000")
+        
+        # Create counter for ratingplans if it doesn't exist
+        existing_ratingplan_counter = await counter_collection.find_one({"_id": "ratingplan_id"})
+        if not existing_ratingplan_counter:
+            await counter_collection.insert_one({
+                "_id": "ratingplan_id",
+                "sequence_value": 100000000
+            })
+            logger.info("Created ratingplan_id counter with initial value 100000000")
     except Exception as e:
         logger.error(f"Error creating counter collection: {e}")
 
@@ -959,6 +968,255 @@ async def create_indexes_and_validations():
                     "priority": {
                         "bsonType": "int",
                         "description": "must be an integer and is required"
+                    },
+                    "created_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "updated_at": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    }
+                }
+            }
+        },
+        "validationLevel": "strict"
+    })
+
+    # RatingPlan collection indexes and validations
+    ratingplan_collection = db["ratingplans"]
+    
+    # Create indexes
+    await ratingplan_collection.create_index("id", unique=True)
+    await ratingplan_collection.create_index("plan_name")
+    await ratingplan_collection.create_index("active")
+    await ratingplan_collection.create_index("company")
+    await ratingplan_collection.create_index("lob")
+    await ratingplan_collection.create_index("state")
+    await ratingplan_collection.create_index("product")
+    await ratingplan_collection.create_index("algorithm")
+    await ratingplan_collection.create_index("effective_date")
+    await ratingplan_collection.create_index("expiration_date")
+    
+    # Create compound unique index for primary unique combination
+    # plan_name + company + lob + product + state + effective_date (algorithm excluded to allow versioning on algorithm changes)
+    # Partial index: only applies to active records (active: true)
+    try:
+        # Drop existing index with the same name if it exists (to handle specification changes)
+        try:
+            await ratingplan_collection.drop_index("unique_ratingplan_combination_idx")
+            logger.info("Dropped existing unique_ratingplan_combination_idx index to recreate with updated specification")
+        except Exception as drop_error:
+            # Index doesn't exist or couldn't be dropped, that's fine
+            logger.debug(f"Could not drop existing unique_ratingplan_combination_idx index (may not exist): {drop_error}")
+        
+        # Before creating unique index, handle any duplicate records
+        # Find all active records grouped by the unique combination
+        from datetime import datetime, timezone, timedelta
+        pipeline = [
+            {"$match": {"active": True}},
+            {
+                "$group": {
+                    "_id": {
+                        "plan_name": "$plan_name",
+                        "company": "$company",
+                        "lob": "$lob",
+                        "product": "$product",
+                        "state": "$state",
+                        "effective_date": "$effective_date"
+                    },
+                    "records": {
+                        "$push": {
+                            "id": "$id",
+                            "version": "$version",
+                            "created_at": "$created_at"
+                        }
+                    },
+                    "count": {"$sum": 1}
+                }
+            },
+            {"$match": {"count": {"$gt": 1}}}
+        ]
+
+        duplicate_groups = await ratingplan_collection.aggregate(pipeline).to_list(length=None)
+
+        if duplicate_groups:
+            logger.warning(f"Found {len(duplicate_groups)} duplicate groups in ratingplans collection. Cleaning up duplicates...")
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_minus_one = today - timedelta(days=1)
+            now = datetime.now(timezone.utc)
+
+            total_expired = 0
+            for group in duplicate_groups:
+                records = group["records"]
+                # Sort by version (descending) and created_at (descending) to keep the most recent/highest version
+                def sort_key(record):
+                    version = record.get("version", 1.0)
+                    created_at = record.get("created_at")
+                    if isinstance(created_at, datetime):
+                        created_at_val = created_at
+                    else:
+                        created_at_val = datetime.min.replace(tzinfo=timezone.utc)
+                    return (version, created_at_val)
+
+                records.sort(key=sort_key, reverse=True)
+
+                # Keep the first record (highest version, most recent), expire the rest
+                keep_id = records[0]["id"]
+                expire_ids = [r["id"] for r in records[1:]]
+
+                if expire_ids:
+                    result = await ratingplan_collection.update_many(
+                        {"id": {"$in": expire_ids}},
+                        {
+                            "$set": {
+                                "active": False,
+                                "expiration_date": today_minus_one,
+                                "updated_at": now
+                            }
+                        }
+                    )
+                    total_expired += result.modified_count
+                    logger.info(f"Expired {len(expire_ids)} duplicate rating plan records (keeping id {keep_id})")
+
+            logger.info(f"Cleaned up duplicate rating plan records. Kept {len(duplicate_groups)} records, expired {total_expired} duplicates")
+
+        # Create the new index with partial filter expression (algorithm excluded to allow versioning)
+        await ratingplan_collection.create_index(
+            [("plan_name", 1), ("company", 1), ("lob", 1), ("product", 1), ("state", 1), ("effective_date", 1)],
+            unique=True,
+            partialFilterExpression={"active": True},
+            name="unique_ratingplan_combination_idx"
+        )
+        logger.info("Created compound unique partial index for plan_name+company+lob+product+state+effective_date (active records only, algorithm excluded for versioning)")
+    except Exception as e:
+        # Check if it's a duplicate key error and try to clean up
+        if "duplicate key" in str(e).lower() or "E11000" in str(e):
+            logger.warning(f"Duplicate key error when creating index. Attempting to clean up duplicates and retry...")
+            try:
+                from datetime import datetime, timezone, timedelta
+                today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                today_minus_one = today - timedelta(days=1)
+
+                pipeline = [
+                    {"$match": {"active": True}},
+                    {
+                        "$group": {
+                            "_id": {
+                                "plan_name": "$plan_name",
+                                "company": "$company",
+                                "lob": "$lob",
+                                "product": "$product",
+                                "state": "$state",
+                                "effective_date": "$effective_date"
+                            },
+                            "records": {"$push": {"id": "$id", "version": "$version", "created_at": "$created_at"}},
+                            "count": {"$sum": 1}
+                        }
+                    },
+                    {"$match": {"count": {"$gt": 1}}}
+                ]
+
+                duplicate_groups = await ratingplan_collection.aggregate(pipeline).to_list(length=None)
+
+                total_expired = 0
+                for group in duplicate_groups:
+                    records = group["records"]
+                    def sort_key(record):
+                        version = record.get("version", 1.0)
+                        created_at = record.get("created_at")
+                        if isinstance(created_at, datetime):
+                            created_at_val = created_at
+                        else:
+                            created_at_val = datetime.min.replace(tzinfo=timezone.utc)
+                        return (version, created_at_val)
+
+                    records.sort(key=sort_key, reverse=True)
+
+                    keep_id = records[0]["id"]
+                    expire_ids = [r["id"] for r in records[1:]]
+
+                    if expire_ids:
+                        result = await ratingplan_collection.update_many(
+                            {"id": {"$in": expire_ids}},
+                            {
+                                "$set": {
+                                    "active": False,
+                                    "expiration_date": today_minus_one,
+                                    "updated_at": datetime.now(timezone.utc)
+                                }
+                            }
+                        )
+                        total_expired += result.modified_count
+                        logger.info(f"Expired {len(expire_ids)} duplicate rating plan records (keeping id {keep_id})")
+
+                logger.info(f"Retry cleanup: Expired {total_expired} duplicate rating plan records")
+
+                # Retry creating the index
+                await ratingplan_collection.create_index(
+                    [("plan_name", 1), ("company", 1), ("lob", 1), ("product", 1), ("state", 1), ("effective_date", 1)],
+                    unique=True,
+                    partialFilterExpression={"active": True},
+                    name="unique_ratingplan_combination_idx"
+                )
+                logger.info("Successfully created compound unique partial index for ratingplans after cleaning duplicates")
+            except Exception as retry_error:
+                logger.error(f"Failed to create compound unique index for ratingplans even after cleanup: {retry_error}")
+                logger.warning(f"Index creation failed. Manual cleanup may be required. Error: {e}")
+        else:
+            logger.warning(f"Could not create compound unique index for ratingplans: {e}")
+
+    # Create validation schema
+    await db.command({
+        "collMod": "ratingplans",
+        "validator": {
+            "$jsonSchema": {
+                "bsonType": "object",
+                "required": ["plan_name", "company", "lob", "state", "product", "algorithm", "active", "version", "effective_date", "created_at", "updated_at"],
+                "properties": {
+                    "id": {
+                        "bsonType": "int",
+                        "description": "must be an integer"
+                    },
+                    "plan_name": {
+                        "bsonType": "string",
+                        "description": "must be a string and is required"
+                    },
+                    "active": {
+                        "bsonType": "bool",
+                        "description": "must be a boolean and is required"
+                    },
+                    "version": {
+                        "bsonType": "double",
+                        "description": "must be a float and is required"
+                    },
+                    "effective_date": {
+                        "bsonType": "date",
+                        "description": "must be a date and is required"
+                    },
+                    "expiration_date": {
+                        "bsonType": ["date", "null"],
+                        "description": "must be a date or null (optional)"
+                    },
+                    "company": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "lob": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "state": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "product": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
+                    },
+                    "algorithm": {
+                        "bsonType": "int",
+                        "description": "must be an integer ID and is required"
                     },
                     "created_at": {
                         "bsonType": "date",

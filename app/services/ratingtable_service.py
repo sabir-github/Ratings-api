@@ -249,7 +249,7 @@ class RatingTableService:
             # This means no changes were found, return early with appropriate message
             return {
                 "message": "No changes found in data field. Record with same combination already exists.",
-                "existing_record_id": existing_table["id"] if existing_table else None,
+                "id": existing_table["id"] if existing_table else None,
                 "existing_version": existing_table.get("version", 1.0) if existing_table else None,
                 "data_comparison": data_comparison
             }
@@ -259,7 +259,8 @@ class RatingTableService:
         if not created_table:
             raise ValueError("Failed to retrieve created rating table")
             
-        created_table_schema = RatingTableResponseSchema(**created_table)
+        normalized_created = self._normalize_table_document(created_table)
+        created_table_schema = RatingTableResponseSchema(**normalized_created)
         
         # Convert to dict and serialize datetime objects for JSON compatibility
         rating_table_dict = created_table_schema.dict()
@@ -419,11 +420,45 @@ class RatingTableService:
         result = await collection.insert_one(ratingtable_dict)
         return existing_table, data_comparison, new_version, result, expired_id
 
+    def _normalize_table_document(self, table: dict) -> dict:
+        """Normalize MongoDB document to match schema expectations"""
+        # Remove MongoDB _id field if present
+        table = {k: v for k, v in table.items() if k != "_id"}
+        
+        # Handle data field - ensure it's a list
+        if "data" not in table:
+            logger.warning(f"Rating table {table.get('id')} is missing data field, defaulting to empty list")
+            table["data"] = []
+        elif not isinstance(table["data"], list):
+            logger.warning(f"Rating table {table.get('id')} has invalid data type, converting to list")
+            table["data"] = []
+        
+        # Handle lookup_config field - ensure it's a dict
+        if "lookup_config" not in table:
+            logger.warning(f"Rating table {table.get('id')} is missing lookup_config field, defaulting to empty dict")
+            table["lookup_config"] = {}
+        elif not isinstance(table["lookup_config"], dict):
+            logger.warning(f"Rating table {table.get('id')} has invalid lookup_config type, converting to dict")
+            table["lookup_config"] = {}
+        
+        # Handle ai_metadata field - ensure it's a dict
+        if "ai_metadata" not in table:
+            logger.warning(f"Rating table {table.get('id')} is missing ai_metadata field, defaulting to empty dict")
+            table["ai_metadata"] = {}
+        elif not isinstance(table["ai_metadata"], dict):
+            logger.warning(f"Rating table {table.get('id')} has invalid ai_metadata type, converting to dict")
+            table["ai_metadata"] = {}
+        
+        return table
+
     async def get_ratingtable(self, ratingtable_id: int) -> Optional[RatingTableResponseSchema]:
         """Get a rating table by ID"""
         collection = await self.get_collection()
         table = await collection.find_one({"id": ratingtable_id})
-        return RatingTableResponseSchema(**table) if table else None
+        if not table:
+            return None
+        normalized_table = self._normalize_table_document(table)
+        return RatingTableResponseSchema(**normalized_table)
 
     async def get_ratingtables(
         self,
@@ -465,7 +500,8 @@ class RatingTableService:
         
         cursor = collection.find(query).skip(skip).limit(limit).sort(sort)
         tables = await cursor.to_list(length=limit)
-        return [RatingTableResponseSchema(**table) for table in tables]
+        normalized_tables = [self._normalize_table_document(table) for table in tables]
+        return [RatingTableResponseSchema(**table) for table in normalized_tables]
 
     async def update_ratingtable(self, ratingtable_id: int, update_data: RatingTableUpdateSchema) -> Optional[RatingTableResponseSchema]:
         """Update a rating table using transaction if available"""
@@ -507,7 +543,8 @@ class RatingTableService:
                             update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
                             if not update_dict:
                                 await session.abort_transaction()
-                                return RatingTableResponseSchema(**existing_table)
+                                normalized_existing = self._normalize_table_document(existing_table)
+                                return RatingTableResponseSchema(**normalized_existing)
                                 
                             update_dict["updated_at"] = datetime.now(timezone.utc)
                             
@@ -519,7 +556,8 @@ class RatingTableService:
                             
                             if result.modified_count == 0:
                                 await session.abort_transaction()
-                                return RatingTableResponseSchema(**existing_table)
+                                normalized_existing = self._normalize_table_document(existing_table)
+                                return RatingTableResponseSchema(**normalized_existing)
                     except PyMongoError as e:
                         logger.error(f"Database error in update_ratingtable transaction: {e}")
                         raise
@@ -552,7 +590,8 @@ class RatingTableService:
                 
                 update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
                 if not update_dict:
-                    return RatingTableResponseSchema(**existing_table)
+                    normalized_existing = self._normalize_table_document(existing_table)
+                    return RatingTableResponseSchema(**normalized_existing)
                     
                 update_dict["updated_at"] = datetime.now(timezone.utc)
                 
@@ -562,14 +601,18 @@ class RatingTableService:
                 )
                 
                 if result.modified_count == 0:
-                    return RatingTableResponseSchema(**existing_table)
+                    normalized_existing = self._normalize_table_document(existing_table)
+                    return RatingTableResponseSchema(**normalized_existing)
         except Exception as e:
             logger.error(f"Error updating rating table: {e}")
             raise
         
         # Fetch the updated record
         updated_table = await collection.find_one({"id": ratingtable_id})
-        return RatingTableResponseSchema(**updated_table) if updated_table else None
+        if updated_table:
+            normalized_updated = self._normalize_table_document(updated_table)
+            return RatingTableResponseSchema(**normalized_updated)
+        return None
 
     async def delete_ratingtable(self, ratingtable_id: int) -> bool:
         """Delete a rating table using transaction if available"""
@@ -699,7 +742,7 @@ class RatingTableService:
                                             await session.abort_transaction()
                                             results.append({
                                                 "message": "No changes found in data field. Record with same combination already exists.",
-                                                "existing_record_id": existing_table["id"],
+                                                "id": existing_table["id"],
                                                 "existing_version": existing_table.get("version", 1.0),
                                                 "data_comparison": data_comparison,
                                                 "skipped": True
@@ -808,7 +851,8 @@ class RatingTableService:
                 created_table = await collection.find_one({"_id": result.inserted_id})
                 
                 if created_table:
-                    created_table_schema = RatingTableResponseSchema(**created_table)
+                    normalized_created = self._normalize_table_document(created_table)
+                    created_table_schema = RatingTableResponseSchema(**normalized_created)
                     # Convert to dict and serialize datetime objects for JSON compatibility
                     rating_table_dict = created_table_schema.dict()
                     rating_table_dict = self._serialize_datetime(rating_table_dict)
@@ -819,6 +863,11 @@ class RatingTableService:
                         "data_comparison": data_comparison,
                         "version": new_version,
                         "created": True
+                    })
+                else:
+                    results.append({
+                        "message": f"Error: Failed to retrieve created rating table after insertion.",
+                        "error": True
                     })
             except Exception as e:
                 # Outer exception handler for validation errors before transaction
@@ -1100,7 +1149,7 @@ class RatingTableService:
                                 "sheet_name": sheet_name,
                                 "status": "skipped",
                                 "message": create_result.get("message", "No changes found"),
-                                "existing_record_id": create_result.get("existing_record_id"),
+                                "id": create_result.get("id"),
                                 "data_comparison": create_result.get("data_comparison", {})
                             })
                         else:

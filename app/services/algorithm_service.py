@@ -251,7 +251,7 @@ class AlgorithmService:
             
             return {
                 "message": "No changes found in algorithm content. Record with same combination already exists.",
-                "existing_record_id": existing_algorithm["id"],
+                "id": existing_algorithm["id"],
                 "existing_version": existing_algorithm.get("version", 1.0),
                 "content_comparison": content_comparison
             }
@@ -261,7 +261,8 @@ class AlgorithmService:
         if not created_algorithm:
             raise ValueError("Failed to retrieve created algorithm after insertion.")
 
-        created_algorithm_schema = AlgorithmResponseSchema(**created_algorithm)
+        normalized_created = self._normalize_algorithm_document(created_algorithm)
+        created_algorithm_schema = AlgorithmResponseSchema(**normalized_created)
         
         # Convert to dict and serialize datetime objects for JSON compatibility
         algorithm_dict = created_algorithm_schema.dict()
@@ -425,11 +426,55 @@ class AlgorithmService:
         result = await collection.insert_one(algorithm_dict)
         return existing_algorithm, content_comparison, new_version, result, expired_id
 
+    def _normalize_algorithm_document(self, algorithm: dict) -> dict:
+        """Normalize MongoDB document to match schema expectations"""
+        # Remove MongoDB _id field if present
+        algorithm = {k: v for k, v in algorithm.items() if k != "_id"}
+        
+        # Handle required_tables field - ensure it's a list
+        if "required_tables" not in algorithm:
+            logger.warning(f"Algorithm {algorithm.get('id')} is missing required_tables field, defaulting to empty list")
+            algorithm["required_tables"] = []
+        elif not isinstance(algorithm["required_tables"], list):
+            # If required_tables exists but is not a list, convert it
+            if isinstance(algorithm["required_tables"], int):
+                algorithm["required_tables"] = [algorithm["required_tables"]]
+            else:
+                logger.warning(f"Algorithm {algorithm.get('id')} has invalid required_tables type, converting to list")
+                algorithm["required_tables"] = []
+        
+        # Handle formula field - ensure it's a dict
+        if "formula" not in algorithm:
+            logger.warning(f"Algorithm {algorithm.get('id')} is missing formula field, defaulting to empty dict")
+            algorithm["formula"] = {}
+        elif not isinstance(algorithm["formula"], dict):
+            logger.warning(f"Algorithm {algorithm.get('id')} has invalid formula type, converting to dict")
+            algorithm["formula"] = {}
+        
+        # Handle calculation_steps field - ensure it's a list (optional field)
+        if "calculation_steps" not in algorithm:
+            algorithm["calculation_steps"] = []
+        elif not isinstance(algorithm["calculation_steps"], list):
+            logger.warning(f"Algorithm {algorithm.get('id')} has invalid calculation_steps type, converting to list")
+            algorithm["calculation_steps"] = []
+        
+        # Handle variables field - ensure it's a dict (optional field)
+        if "variables" not in algorithm:
+            algorithm["variables"] = {}
+        elif not isinstance(algorithm["variables"], dict):
+            logger.warning(f"Algorithm {algorithm.get('id')} has invalid variables type, converting to dict")
+            algorithm["variables"] = {}
+        
+        return algorithm
+
     async def get_algorithm(self, algorithm_id: int) -> Optional[AlgorithmResponseSchema]:
         """Get an algorithm by ID"""
         collection = await self.get_collection()
         algorithm = await collection.find_one({"id": algorithm_id})
-        return AlgorithmResponseSchema(**algorithm) if algorithm else None
+        if not algorithm:
+            return None
+        normalized_algorithm = self._normalize_algorithm_document(algorithm)
+        return AlgorithmResponseSchema(**normalized_algorithm)
 
     async def get_algorithms(
         self,
@@ -469,7 +514,8 @@ class AlgorithmService:
         
         cursor = collection.find(query).skip(skip).limit(limit).sort(sort)
         algorithms = await cursor.to_list(length=limit)
-        return [AlgorithmResponseSchema(**algorithm) for algorithm in algorithms]
+        normalized_algorithms = [self._normalize_algorithm_document(algorithm) for algorithm in algorithms]
+        return [AlgorithmResponseSchema(**algorithm) for algorithm in normalized_algorithms]
 
     async def update_algorithm(self, algorithm_id: int, update_data: AlgorithmUpdateSchema) -> Optional[AlgorithmResponseSchema]:
         """Update an algorithm using transaction if available"""
@@ -502,7 +548,8 @@ class AlgorithmService:
                                 update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
                                 if not update_dict:
                                     await session.abort_transaction()
-                                    return AlgorithmResponseSchema(**existing_algorithm)
+                                    normalized_existing = self._normalize_algorithm_document(existing_algorithm)
+                                    return AlgorithmResponseSchema(**normalized_existing)
                                     
                                 update_dict["updated_at"] = datetime.now(timezone.utc)
                                 
@@ -514,7 +561,8 @@ class AlgorithmService:
                                 
                                 if result.modified_count == 0:
                                     await session.abort_transaction()
-                                    return AlgorithmResponseSchema(**existing_algorithm)
+                                    normalized_existing = self._normalize_algorithm_document(existing_algorithm)
+                                    return AlgorithmResponseSchema(**normalized_existing)
                         except PyMongoError as e:
                             logger.error(f"Database error in update_algorithm transaction: {e}")
                             raise
@@ -539,7 +587,8 @@ class AlgorithmService:
                         
                         update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
                         if not update_dict:
-                            return AlgorithmResponseSchema(**existing_algorithm)
+                            normalized_existing = self._normalize_algorithm_document(existing_algorithm)
+                            return AlgorithmResponseSchema(**normalized_existing)
                             
                         update_dict["updated_at"] = datetime.now(timezone.utc)
                         
@@ -549,7 +598,8 @@ class AlgorithmService:
                         )
                         
                         if result.modified_count == 0:
-                            return AlgorithmResponseSchema(**existing_algorithm)
+                            normalized_existing = self._normalize_algorithm_document(existing_algorithm)
+                            return AlgorithmResponseSchema(**normalized_existing)
                     else:
                         raise
                 except Exception as e:
@@ -571,7 +621,8 @@ class AlgorithmService:
                 
                 update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
                 if not update_dict:
-                    return AlgorithmResponseSchema(**existing_algorithm)
+                    normalized_existing = self._normalize_algorithm_document(existing_algorithm)
+                    return AlgorithmResponseSchema(**normalized_existing)
                     
                 update_dict["updated_at"] = datetime.now(timezone.utc)
                 
@@ -581,7 +632,8 @@ class AlgorithmService:
                 )
                 
                 if result.modified_count == 0:
-                    return AlgorithmResponseSchema(**existing_algorithm)
+                    normalized_existing = self._normalize_algorithm_document(existing_algorithm)
+                    return AlgorithmResponseSchema(**normalized_existing)
                     
         except Exception as e:
             logger.error(f"Error updating algorithm: {e}")
@@ -589,7 +641,10 @@ class AlgorithmService:
         
         # Fetch the updated record
         updated_algorithm = await collection.find_one({"id": algorithm_id})
-        return AlgorithmResponseSchema(**updated_algorithm) if updated_algorithm else None
+        if updated_algorithm:
+            normalized_updated = self._normalize_algorithm_document(updated_algorithm)
+            return AlgorithmResponseSchema(**normalized_updated)
+        return None
 
     async def delete_algorithm(self, algorithm_id: int) -> bool:
         """Delete an algorithm using transaction if available"""
@@ -792,7 +847,7 @@ class AlgorithmService:
                 
                 results.append({
                     "message": "No changes found in algorithm content. Record with same combination already exists.",
-                    "existing_record_id": existing_algorithm["id"],
+                    "id": existing_algorithm["id"],
                     "existing_version": existing_algorithm.get("version", 1.0),
                     "content_comparison": content_comparison,
                     "skipped": True
@@ -808,7 +863,8 @@ class AlgorithmService:
                 })
                 continue
 
-            created_algorithm_schema = AlgorithmResponseSchema(**created_algorithm)
+            normalized_created = self._normalize_algorithm_document(created_algorithm)
+            created_algorithm_schema = AlgorithmResponseSchema(**normalized_created)
             # Convert to dict and serialize datetime objects for JSON compatibility
             algorithm_dict = created_algorithm_schema.dict()
             algorithm_dict = self._serialize_datetime(algorithm_dict)
