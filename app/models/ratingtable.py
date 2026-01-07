@@ -19,21 +19,20 @@ class PyObjectId(ObjectId):
         field_schema.update(type="string")
 
 class RatingTableBase(BaseModel):
-    table_code: str = Field(..., description="Table code")
-    table_name: str = Field(..., description="Table name")
-    table_type: str = Field(..., description="Table type")
+    table_name: str = Field(..., description="Table name (mandatory)")
+    table_type: Optional[str] = Field(None, description="Table type (optional)")
     active: bool = Field(..., description="Active status")
     version: float = Field(..., description="Version")
-    effective_date:datetime = Field(..., description="Effective Date")
-    expiration_date:datetime = Field(..., description="Expiration Date")
-    data:list = Field(..., description="Table Data")
-    company: dict =  Field(..., description="Company")
-    lob: dict     =  Field(..., description="Lob")
-    state: dict   = Field(..., description="State")
-    product: dict =  Field(..., description="Product")
-    context: dict = Field(..., description="Context")
-    lookup_config: dict = Field(..., description="Lookup config")
-    ai_metadata: dict = Field(..., description="AI Metadata")
+    effective_date: Optional[datetime] = Field(None, description="Effective Date (optional)")
+    expiration_date: Optional[datetime] = Field(None, description="Expiration Date (optional)")
+    data: list = Field(default_factory=list, description="Table Data")
+    company: int = Field(..., description="Company ID")
+    lob: int = Field(..., description="Lob ID")
+    state: int = Field(..., description="State ID")
+    product: int = Field(..., description="Product ID")
+    context: Optional[int] = Field(None, description="Context ID (optional)")
+    lookup_config: dict = Field(default_factory=dict, description="Lookup config")
+    ai_metadata: dict = Field(default_factory=dict, description="AI Metadata")
 
 class RatingTableCreate(RatingTableBase):
     id: Optional[int] = Field(None, description="Rating ID (auto-generated if not provided)")
@@ -46,11 +45,11 @@ class RatingUpdate(BaseModel):
     effective_date: Optional[datetime] = None
     expiration_date: Optional[datetime] = None
     #data: Optional[list] = None
-    company: Optional[dict] = None
-    lob: Optional[dict] = None
-    state: Optional[dict] = None
-    product: Optional[dict] = None
-    context: Optional[dict] = None
+    company: Optional[int] = None
+    lob: Optional[int] = None
+    state: Optional[int] = None
+    product: Optional[int] = None
+    context: Optional[int] = None
     lookup_config: Optional[dict] = None
     ai_metadata: Optional[dict] = None
 

@@ -3,16 +3,20 @@ from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import secrets
+import logging
 
 from app.core.config import settings
+from app.core.auth_provider_factory import get_auth_provider
 
-# Password hashing
+logger = logging.getLogger(__name__)
+
+# Password hashing (kept for backward compatibility if needed)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# OAuth2 scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+# OAuth2 Bearer token scheme
+security = HTTPBearer(auto_error=False)  # Don't auto-raise error, handle manually
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
@@ -58,8 +62,27 @@ def create_refresh_token(data: Dict[str, Any], expires_delta: Optional[timedelta
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-def verify_token(token: str) -> Optional[Dict[str, Any]]:
-    """Verify and decode a JWT token"""
+async def verify_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verify and decode a token (OIDC or local JWT)
+    Tries OIDC provider first, falls back to local JWT if no provider configured
+    """
+    # If OIDC security is disabled, skip verification
+    if not settings.ENABLE_OIDC_SECURITY:
+        logger.debug("OIDC security disabled, skipping token verification")
+        return None
+    
+    # Try OIDC provider first
+    provider = get_auth_provider()
+    if provider:
+        try:
+            claims = await provider.verify_token(token)
+            if claims:
+                return claims
+        except Exception as e:
+            logger.warning(f"OIDC token verification failed: {e}")
+    
+    # Fallback to local JWT verification (for backward compatibility)
     try:
         payload = jwt.decode(
             token, 
@@ -69,35 +92,85 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
     except JWTError:
         return None
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
-    """Get current user from token"""
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Dict[str, Any]:
+    """
+    Get current user from OIDC or local JWT token.
+    If OIDC security is disabled, returns a default anonymous user.
+    """
+    # If OIDC security is disabled, return anonymous user
+    if not settings.ENABLE_OIDC_SECURITY:
+        logger.debug("OIDC security disabled, returning anonymous user")
+        return {
+            "sub": "anonymous",
+            "username": "anonymous",
+            "id": "anonymous",
+            "user_id": None,
+            "email": None,
+            "roles": [],
+            "role": None,
+            "claims": {},
+        }
+    
+    # OIDC security is enabled - require authentication
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     
-    payload = verify_token(token)
+    if not credentials:
+        raise credentials_exception
+    
+    token = credentials.credentials
+    payload = await verify_token(token)
+    
     if payload is None:
         raise credentials_exception
     
-    username: str = payload.get("sub")
-    user_id: int = payload.get("user_id")
-    role: str = payload.get("role")
+    # Extract user information from token
+    # OIDC tokens use 'sub' for subject, local JWT might use 'user_id'
+    sub = payload.get("sub")
+    user_id = payload.get("user_id")
+    username = payload.get("preferred_username") or payload.get("username") or sub
+    email = payload.get("email")
     
-    if username is None or user_id is None:
+    # Extract roles - OIDC might have roles in different places
+    roles = []
+    if "realm_access" in payload and "roles" in payload["realm_access"]:
+        roles = payload["realm_access"]["roles"]
+    elif "roles" in payload:
+        roles = payload["roles"]
+    elif "role" in payload:
+        roles = [payload["role"]]
+    
+    # For OIDC, we use 'sub' as the identifier
+    # For local JWT, we use 'user_id'
+    identifier = user_id if user_id else sub
+    
+    if not identifier:
         raise credentials_exception
     
     return {
-        "username": username,
-        "id": user_id,
-        "role": role
+        "sub": sub or identifier,
+        "username": username or identifier,
+        "id": identifier,
+        "user_id": user_id,
+        "email": email,
+        "roles": roles,
+        "role": roles[0] if roles else None,  # Backward compatibility
+        "claims": payload,  # Include all claims for advanced use cases
     }
 
-def get_current_active_user(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    """Get current active user"""
-    # In a real implementation, you would check if the user is active
-    # For now, we assume all users with valid tokens are active
+async def get_current_active_user(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get current active user
+    In a real implementation, you would check if the user is active
+    For now, we assume all users with valid tokens are active
+    """
     return current_user
 
 def generate_reset_token() -> str:

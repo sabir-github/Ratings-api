@@ -1,0 +1,39 @@
+# Ignore generated/cached files in venv
+# Keep package source code, but ignore compiled/cached files
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg-info/
+*.dist-info/
+*.egg
+*.whl
+
+# Compiled extensions
+*.so
+*.dylib
+*.dll
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

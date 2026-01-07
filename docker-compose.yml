@@ -1,30 +1,51 @@
-version: '3.8'
-
 services:
-  api:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - MONGODB_URL=mongodb://mongodb:27017
-      - MONGODB_DB_NAME=ratings_db
-    depends_on:
-      - mongodb
-    volumes:
-      - .:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    restart: unless-stopped
+  # api:
+  #    build: .
+  #    ports:
+  #      - "8000:8000"
+  #    environment:
+  #      - MONGODB_URL=mongodb://admin:password@mongodb:27017/?authSource=admin
+  #      - MONGODB_DB_NAME=ratings_db
+  #    depends_on:
+  #      - mongodb
+  #    volumes:
+  #      - .:/app
+  #    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  #    restart: unless-stopped
 
   mongodb:
     image: mongo:6.0
     ports:
-      - "27017:27017"
+      - "37017:27017"
     environment:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=password
     volumes:
       - mongodb_data:/data/db
       - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: mongosh --eval "db.adminCommand('ping')" mongodb://admin:password@localhost:27017/?authSource=admin --quiet || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  mongo-express:
+    image: mongo-express:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=password
+      - ME_CONFIG_MONGODB_SERVER=mongodb
+      - ME_CONFIG_MONGODB_PORT=27017
+      - ME_CONFIG_MONGODB_AUTH_DATABASE=admin
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
