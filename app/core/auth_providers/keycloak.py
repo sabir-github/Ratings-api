@@ -82,7 +82,7 @@ class KeycloakProvider(AuthProvider):
         if self.client_secret:
             data["client_secret"] = self.client_secret
         
-        async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+        async with httpx.AsyncClient(verify=self.verify_ssl, follow_redirects=True) as client:
             response = await client.post(
                 self.token_url,
                 data=data,
@@ -110,7 +110,7 @@ class KeycloakProvider(AuthProvider):
             "client_secret": self.client_secret,
         }
         
-        async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+        async with httpx.AsyncClient(verify=self.verify_ssl, follow_redirects=True) as client:
             response = await client.post(
                 self.token_url,
                 data=data,
@@ -134,7 +134,7 @@ class KeycloakProvider(AuthProvider):
             return self._jwks_cache
         
         # Fetch fresh JWKS
-        async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+        async with httpx.AsyncClient(verify=self.verify_ssl, follow_redirects=True) as client:
             response = await client.get(self.jwks_url)
             response.raise_for_status()
             jwks = response.json()
@@ -240,7 +240,7 @@ class KeycloakProvider(AuthProvider):
     async def get_user_info(self, token: str) -> Optional[UserInfo]:
         """Get user information from Keycloak userinfo endpoint"""
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl, follow_redirects=True) as client:
                 response = await client.get(
                     self.userinfo_url,
                     headers={"Authorization": f"Bearer {token}"},
@@ -289,7 +289,7 @@ class KeycloakProvider(AuthProvider):
             data["client_secret"] = self.client_secret
         
         try:
-            async with httpx.AsyncClient(verify=self.verify_ssl) as client:
+            async with httpx.AsyncClient(verify=self.verify_ssl, follow_redirects=True) as client:
                 response = await client.post(
                     self.token_url,
                     data=data,

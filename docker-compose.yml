@@ -13,6 +13,11 @@ services:
      command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
      restart: unless-stopped
 
+  # MCP server is now integrated with the FastAPI server (api service)
+  # No separate mcp-server container needed - MCP runs on the same port (8000)
+  # Access MCP endpoints at: /api/v1/mcp/*
+  # For stdio-based access (Cursor IDE), use run_mcp_server.py locally or HTTP bridge
+
   mongodb:
     image: mongo:6.0
     ports:
