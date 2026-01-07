@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "ratings-api": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "ratings-api-api-1",
+        "python",
+        "/app/run_mcp_server.py"
+      ],
+      "env": {
+        "API_URL": "http://localhost:8000",
+        "MONGODB_URL": "mongodb://admin:password@localhost:37017/?authSource=admin",
+        "MONGODB_DB_NAME": "ratings_db",
+        "PYTHONPATH": "/app"
+      }
+    },
+    "mongodb": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": [
+        "-y",
+        "@mongodb-js/mongodb-mcp-server"
+      ],
+      "env": {
+        "MDB_MCP_CONNECTION_STRING": "mongodb://admin:password@localhost:37017/ratings_db?authSource=admin",
+        "MDB_MCP_READ_ONLY": "true",
+        "PATH": "C:\\Program Files\\nodejs;%PATH%"
+      }
+    }
+  }
+}
+
+
+

@@ -18,8 +18,8 @@ class PyObjectId(ObjectId):
     def __modify_schema__(cls, field_schema):
         field_schema.update(type="string")
 
-class RatingManualBase(BaseModel):
-    manual_name: str = Field(..., description="Manual name (mandatory)")
+class RatingPlanBase(BaseModel):
+    plan_name: str = Field(..., description="Plan name (mandatory)")
     active: bool = Field(..., description="Active status")
     version: Optional[float] = Field(None, description="Version")
     effective_date: Optional[datetime] = Field(None, description="Effective Date (optional)")
@@ -29,20 +29,18 @@ class RatingManualBase(BaseModel):
     state: int = Field(..., description="State ID")
     product: int = Field(..., description="Product ID")
     algorithm: int = Field(..., description="Algorithm ID")
-    priority: int = Field(..., description="Priority")
 
-class RatingManualCreate(RatingManualBase):
-    id: Optional[int] = Field(None, description="Manual ID (auto-generated if not provided)")
+class RatingPlanCreate(RatingPlanBase):
+    id: Optional[int] = Field(None, description="Plan ID (auto-generated if not provided)")
 
-class RatingManualUpdate(BaseModel):
-    """Only these fields can be updated: active, effective_date, expiration_date, priority"""
+class RatingPlanUpdate(BaseModel):
+    """Only these fields can be updated: active, effective_date, expiration_date"""
     active: Optional[bool] = None
     effective_date: Optional[datetime] = None
     expiration_date: Optional[datetime] = None
-    priority: Optional[int] = None
 
-class RatingManualInDB(RatingManualBase):
-    id: int = Field(..., description="Manual ID")
+class RatingPlanInDB(RatingPlanBase):
+    id: int = Field(..., description="Plan ID")
     created_at: datetime
     updated_at: datetime
     
@@ -50,6 +48,6 @@ class RatingManualInDB(RatingManualBase):
         json_encoders = {ObjectId: str}
         from_attributes = True
 
-class RatingManualResponse(RatingManualInDB):
+class RatingPlanResponse(RatingPlanInDB):
     pass
 

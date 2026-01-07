@@ -44,6 +44,7 @@ if allow_all_origins:
         expose_headers=["*"],
         max_age=3600,
     )
+    logger.info(f"CORS: Configured to allow all origins (development mode)")
 else:
     # Use specific origins with credentials enabled
     # Filter out "*" if present with other origins
@@ -57,6 +58,7 @@ else:
         expose_headers=["*"],
         max_age=3600,
     )
+    logger.info(f"CORS: Configured to allow specific origins: {cors_origins}")
 
 # Database events
 @app.on_event("startup")
@@ -69,6 +71,37 @@ async def shutdown_event():
 
 # Include routers
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Initialize and integrate MCP server with FastAPI
+try:
+    from app.mcp_server import mcp, MCP_AVAILABLE
+    if MCP_AVAILABLE and mcp is not None:
+        # FastMCP can be integrated with FastAPI
+        # The MCP server is already accessible via /api/v1/mcp endpoints
+        # FastMCP tools are registered and available through the MCP protocol endpoints
+        logger.info("MCP server initialized and integrated with FastAPI.")
+        logger.info("MCP server is running on the same port as FastAPI (port 8000).")
+        logger.info("MCP endpoints available at:")
+        logger.info("  - /api/v1/mcp/tools - List all MCP tools")
+        logger.info("  - /api/v1/mcp/protocol - MCP protocol endpoint (JSON-RPC)")
+        logger.info("  - /api/v1/mcp/protocol/info - MCP server information")
+        logger.info("  - /api/v1/mcp/status - MCP server status")
+        
+        # Try to include FastMCP router if available (some FastMCP versions expose this)
+        try:
+            if hasattr(mcp, 'router'):
+                app.include_router(mcp.router, prefix="/mcp", tags=["mcp-protocol"])
+                logger.info("FastMCP router included at /mcp")
+        except Exception as router_error:
+            logger.debug(f"FastMCP router not available or already included: {router_error}")
+    else:
+        logger.warning("MCP server not available. Install fastmcp to enable MCP functionality.")
+except ImportError as e:
+    logger.warning(f"fastmcp not available. MCP server functionality disabled. Error: {e}")
+except Exception as e:
+    logger.error(f"Failed to initialize MCP server: {e}")
+    import traceback
+    logger.error(traceback.format_exc())
 
 @app.get("/")
 async def root():
