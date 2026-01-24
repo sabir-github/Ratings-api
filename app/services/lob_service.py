@@ -24,13 +24,9 @@ class LobService:
     async def create_lob(self, lob_data: LobCreateSchema) -> LobResponse:
         collection = await self.get_collection()
         
-        # Auto-generate ID if not provided
-        #print("lob_data",lob_data.id)
-        if lob_data.id is None or lob_data.id == 0:
-            lob_id = await self._generate_lob_id()
-        else:
-            lob_id = lob_data.id
-        #print("lob_id",lob_id)
+        # Auto-generate ID
+        lob_id = await self._generate_lob_id()
+        
         # Check if lob with same ID or code exists
         existing_lob = await collection.find_one({
             "$or": [
@@ -43,7 +39,7 @@ class LobService:
             raise ValueError("Lob with same ID or code already exists")
         
         now = datetime.now(timezone.utc)
-        lob_dict = lob_data.dict(exclude={'id'})
+        lob_dict = lob_data.dict()
         lob_dict.update({
             "id": lob_id,
             "created_at": now,
@@ -137,14 +133,10 @@ class LobService:
         
         lobs_to_insert = []
         for lob_data in lobs_data:
-            # Auto-generate ID if not provided
-            #print(lob_data.id)
-            if lob_data.id is None or lob_data.id == 0:
-                lob_id = await self._generate_lob_id()
-            else:
-                lob_id = lob_data.id
+            # Auto-generate ID
+            lob_id = await self._generate_lob_id()
             
-            lob_dict = lob_data.dict(exclude={'id'})
+            lob_dict = lob_data.dict()
             lob_dict.update({
                 "id": lob_id,
                 "created_at": now,

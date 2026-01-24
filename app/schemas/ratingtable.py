@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class RatingTableCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Table ID (optional, auto-generated if not provided)")
     table_name: str = Field(..., description="Table name (mandatory)")
     table_type: Optional[str] = Field(None, description="Table type (optional)")
     active: bool = Field(True, description="Active status")

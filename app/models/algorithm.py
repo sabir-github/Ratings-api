@@ -35,7 +35,7 @@ class AlgorithmBase(BaseModel):
     variables: Optional[Dict[str, Any]] = Field(None, description="Variables object (optional)")
 
 class AlgorithmCreate(AlgorithmBase):
-    id: Optional[int] = Field(None, description="Algorithm ID (auto-generated if not provided)")
+    pass
 
 class AlgorithmUpdate(BaseModel):
     """Fields that can be updated: algorithm_type, active, effective_date, expiration_date, calculation_steps, variables"""

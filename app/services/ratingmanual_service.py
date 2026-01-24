@@ -126,13 +126,9 @@ class RatingManualService:
         else:
             effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Auto-generate ID if not provided
-        id_was_auto_generated = False
-        if ratingmanual_data.id is None or ratingmanual_data.id == 0:
-            ratingmanual_id = await self._generate_ratingmanual_id()
-            id_was_auto_generated = True
-        else:
-            ratingmanual_id = ratingmanual_data.id
+        # Auto-generate ID
+        id_was_auto_generated = True
+        ratingmanual_id = await self._generate_ratingmanual_id()
         
         # Check if transactions are supported
         use_transactions = await self._check_transactions_supported()
@@ -288,7 +284,7 @@ class RatingManualService:
             await session.abort_transaction()
             raise ValueError("Rating manual with same ID already exists")
         
-        ratingmanual_dict = ratingmanual_data.dict(exclude={'id', 'version'})
+        ratingmanual_dict = ratingmanual_data.dict(exclude={'version'})
         ratingmanual_dict["effective_date"] = effective_date
         ratingmanual_dict.update({
             "id": ratingmanual_id,
@@ -350,7 +346,7 @@ class RatingManualService:
         if id_check:
             raise ValueError("Rating manual with same ID already exists")
         
-        ratingmanual_dict = ratingmanual_data.dict(exclude={'id', 'version'})
+        ratingmanual_dict = ratingmanual_data.dict(exclude={'version'})
         ratingmanual_dict["effective_date"] = effective_date
         ratingmanual_dict.update({
             "id": ratingmanual_id,
@@ -667,12 +663,9 @@ class RatingManualService:
                 else:
                     effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                id_was_auto_generated = False
-                if ratingmanual_data.id is None or ratingmanual_data.id == 0:
-                    ratingmanual_id = await self._generate_ratingmanual_id()
-                    id_was_auto_generated = True
-                else:
-                    ratingmanual_id = ratingmanual_data.id
+                # Auto-generate ID
+                ratingmanual_id = await self._generate_ratingmanual_id()
+                id_was_auto_generated = True
                 
                 if use_transactions:
                     client = await get_client()

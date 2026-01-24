@@ -30,7 +30,7 @@ async def upload_companies_csv(
         df = pd.read_csv(io.BytesIO(contents))
         #print(df)
         # Validate required columns
-        required_columns = ['id','company_code', 'company_name', 'active']
+        required_columns = ['company_code', 'company_name', 'active']
         if not all(col in df.columns for col in required_columns):
             raise HTTPException(
                 status_code=400, 
@@ -41,7 +41,6 @@ async def upload_companies_csv(
         for _, row in df.iterrows():
             try:
                 company_data = CompanyCreateSchema(
-                    id=int(row['id']),
                     company_code=str(row['company_code']),
                     company_name=str(row['company_name']),
                     active=bool(row['active'])
@@ -78,7 +77,7 @@ async def upload_companies_excel(
         df = pd.read_excel(io.BytesIO(contents))
         print(df)
         # Validate required columns
-        required_columns = ['id','company_code', 'company_name', 'active']
+        required_columns = ['company_code', 'company_name', 'active']
         if not all(col in df.columns for col in required_columns):
             raise HTTPException(
                 status_code=400, 
@@ -89,7 +88,6 @@ async def upload_companies_excel(
         for _, row in df.iterrows():
             try:
                 company_data = CompanyCreateSchema(
-                    id=int(row['id']),
                     company_code=str(row['company_code']),
                     company_name=str(row['company_name']),
                     active=bool(row['active'])
@@ -137,7 +135,6 @@ async def upload_lobs_csv(
         for _, row in df.iterrows():
             try:
                 lob_data = LobCreateSchema(
-                    #id=int(row['id']),
                     lob_code=str(row['lob_code']),
                     lob_name=str(row['lob_name']),
                     lob_abbreviation=bool(row['lob_abbreviation']),
@@ -185,8 +182,7 @@ async def upload_lobs_excel(
         lobs_data = []
         for _, row in df.iterrows():
             try:
-                lob_data = CompanyCreateSchema(
-                    #id=int(row['id']),
+                lob_data = LobCreateSchema(
                     lob_code=str(row['lob_code']),
                     lob_name=str(row['lob_name']),
                     lob_abbreviation=str(row['lob_abbreviation']),
@@ -234,8 +230,7 @@ async def upload_states_csv(
         states_data = []
         for _, row in df.iterrows():
             try:
-                state_data = LobCreateSchema(
-                    #id=int(row['id']),
+                state_data = StateCreateSchema(
                     state_code=str(row['state_code']),
                     state_name=str(row['state_name']),
                     active=bool(row['active'])
@@ -283,7 +278,6 @@ async def upload_states_excel(
         for _, row in df.iterrows():
             try:
                 state_data = StateCreateSchema(
-                    #id=int(row['id']),
                     state_code=str(row['state_code']),
                     state_name=str(row['state_name']),
                     active=bool(row['active'])
@@ -332,7 +326,6 @@ async def upload_products_csv(
         for _, row in df.iterrows():
             try:
                 product_data = ProductCreateSchema(
-                    #id=int(row['id']),
                     product_code=str(row['product_code']),
                     product_name=str(row['product_name']),
                     lob_id      =int(row['lob_id']),
@@ -381,7 +374,6 @@ async def upload_states_excel(
         for _, row in df.iterrows():
             try:
                 product_data = ProductCreateSchema(
-                    #id=int(row['id']),
                     product_code=str(row['product_code']),
                     product_name=str(row['product_name']),
                     lob_id=int(row['lob_id']),

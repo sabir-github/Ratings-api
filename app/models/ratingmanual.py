@@ -32,7 +32,7 @@ class RatingManualBase(BaseModel):
     priority: int = Field(..., description="Priority")
 
 class RatingManualCreate(RatingManualBase):
-    id: Optional[int] = Field(None, description="Manual ID (auto-generated if not provided)")
+    pass
 
 class RatingManualUpdate(BaseModel):
     """Only these fields can be updated: active, effective_date, expiration_date, priority"""

@@ -120,13 +120,9 @@ class RatingPlanService:
         else:
             effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Auto-generate ID if not provided
-        id_was_auto_generated = False
-        if ratingplan_data.id is None or ratingplan_data.id == 0:
-            ratingplan_id = await self._generate_ratingplan_id()
-            id_was_auto_generated = True
-        else:
-            ratingplan_id = ratingplan_data.id
+        # Auto-generate ID
+        id_was_auto_generated = True
+        ratingplan_id = await self._generate_ratingplan_id()
         
         # Check if transactions are supported
         use_transactions = await self._check_transactions_supported()
@@ -282,7 +278,7 @@ class RatingPlanService:
             await session.abort_transaction()
             raise ValueError("Rating manual with same ID already exists")
         
-        ratingplan_dict = ratingplan_data.dict(exclude={'id', 'version'})
+        ratingplan_dict = ratingplan_data.dict(exclude={'version'})
         ratingplan_dict["effective_date"] = effective_date
         ratingplan_dict.update({
             "id": ratingplan_id,
@@ -344,7 +340,7 @@ class RatingPlanService:
         if id_check:
             raise ValueError("Rating manual with same ID already exists")
         
-        ratingplan_dict = ratingplan_data.dict(exclude={'id', 'version'})
+        ratingplan_dict = ratingplan_data.dict(exclude={'version'})
         ratingplan_dict["effective_date"] = effective_date
         ratingplan_dict.update({
             "id": ratingplan_id,
@@ -649,12 +645,9 @@ class RatingPlanService:
                 else:
                     effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                id_was_auto_generated = False
-                if ratingplan_data.id is None or ratingplan_data.id == 0:
-                    ratingplan_id = await self._generate_ratingplan_id()
-                    id_was_auto_generated = True
-                else:
-                    ratingplan_id = ratingplan_data.id
+                # Auto-generate ID
+                ratingplan_id = await self._generate_ratingplan_id()
+                id_was_auto_generated = True
                 
                 if use_transactions:
                     client = await get_client()

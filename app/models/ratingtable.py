@@ -35,7 +35,7 @@ class RatingTableBase(BaseModel):
     ai_metadata: dict = Field(default_factory=dict, description="AI Metadata")
 
 class RatingTableCreate(RatingTableBase):
-    id: Optional[int] = Field(None, description="Rating ID (auto-generated if not provided)")
+    pass
 
 class RatingUpdate(BaseModel):
     table_name: Optional[str] = None

@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class ContextCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Context ID (optional, auto-generated if not provided)")
     context_code: str = Field(..., description="Context code")
     context_name: str = Field(..., description="Context name")
     active: bool = Field(..., description="Active status")

@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class RatingPlanCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Plan ID (optional, auto-generated if not provided)")
     plan_name: str = Field(..., description="Plan name (mandatory)")
     active: bool = Field(True, description="Active status")
     version: Optional[float] = Field(None, description="Version (optional, defaults to 1.0, auto-increments if record with same combination exists)")

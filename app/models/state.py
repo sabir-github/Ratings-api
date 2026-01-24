@@ -24,7 +24,7 @@ class StateBase(BaseModel):
     active: bool = Field(..., description="Active status")
 
 class StateCreate(StateBase):
-    id: Optional[int] = Field(None, description="State ID (auto-generated if not provided)")
+    pass
 
 class StateUpdate(BaseModel):
     state_name: Optional[str] = None

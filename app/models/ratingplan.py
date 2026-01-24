@@ -31,7 +31,7 @@ class RatingPlanBase(BaseModel):
     algorithm: int = Field(..., description="Algorithm ID")
 
 class RatingPlanCreate(RatingPlanBase):
-    id: Optional[int] = Field(None, description="Plan ID (auto-generated if not provided)")
+    pass
 
 class RatingPlanUpdate(BaseModel):
     """Only these fields can be updated: active, effective_date, expiration_date"""

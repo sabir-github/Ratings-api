@@ -3,7 +3,6 @@ from typing import Optional, List
 from datetime import datetime
 
 class RatingManualCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Manual ID (optional, auto-generated if not provided)")
     manual_name: str = Field(..., description="Manual name (mandatory)")
     active: bool = Field(True, description="Active status")
     version: Optional[float] = Field(None, description="Version (optional, defaults to 1.0, auto-increments if record with same combination exists)")

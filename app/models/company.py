@@ -24,7 +24,7 @@ class CompanyBase(BaseModel):
     active: bool = Field(..., description="Active status")
 
 class CompanyCreate(CompanyBase):
-    id: Optional[int] = Field(None, description="Company ID (auto-generated if not provided)")
+    pass
 
 class CompanyUpdate(BaseModel):
     company_name: Optional[str] = None

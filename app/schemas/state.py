@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class StateCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="State ID (optional, auto-generated if not provided)")
     state_code: str = Field(..., description="State code")
     state_name: str = Field(..., description="State name")
     active: bool = Field(True, description="Active status")

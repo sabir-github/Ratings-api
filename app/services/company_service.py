@@ -24,13 +24,9 @@ class CompanyService:
     async def create_company(self, company_data: CompanyCreateSchema) -> CompanyResponse:
         collection = await self.get_collection()
         
-        # Auto-generate ID if not provided
-        print("company_data",company_data.id)
-        if company_data.id is None or company_data.id == 0:
-            company_id = await self._generate_company_id()
-        else:
-            company_id = company_data.id
-        print("company_id",company_id)
+        # Auto-generate ID
+        company_id = await self._generate_company_id()
+        
         # Check if company with same ID or code exists
         existing_company = await collection.find_one({
             "$or": [
@@ -43,7 +39,7 @@ class CompanyService:
             raise ValueError("Company with same ID or code already exists")
         
         now = datetime.now(timezone.utc)
-        company_dict = company_data.dict(exclude={'id'})
+        company_dict = company_data.dict()
         company_dict.update({
             "id": company_id,
             "created_at": now,
@@ -133,14 +129,10 @@ class CompanyService:
         
         companies_to_insert = []
         for company_data in companies_data:
-            # Auto-generate ID if not provided
-            #print(company_data.id)
-            if company_data.id is None or company_data.id == 0:
-                company_id = await self._generate_company_id()
-            else:
-                company_id = company_data.id
+            # Auto-generate ID
+            company_id = await self._generate_company_id()
             
-            company_dict = company_data.dict(exclude={'id'})
+            company_dict = company_data.dict()
             company_dict.update({
                 "id": company_id,
                 "created_at": now,

@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class CompanyCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Company ID (optional, auto-generated if not provided)")
     company_code: str = Field(..., description="Company code")
     company_name: str = Field(..., description="Company name")
     active: bool = Field(True, description="Active status")

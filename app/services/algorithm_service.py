@@ -152,13 +152,9 @@ class AlgorithmService:
         else:
             effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Auto-generate ID if not provided
-        id_was_auto_generated = False
-        if algorithm_data.id is None or algorithm_data.id == 0:
-            algorithm_id = await self._generate_algorithm_id()
-            id_was_auto_generated = True
-        else:
-            algorithm_id = algorithm_data.id
+        # Auto-generate ID
+        id_was_auto_generated = True
+        algorithm_id = await self._generate_algorithm_id()
         
         # Check if transactions are supported
         use_transactions = await self._check_transactions_supported()
@@ -337,7 +333,7 @@ class AlgorithmService:
             raise ValueError("Algorithm with same ID already exists")
         
         # Create new record
-        algorithm_dict = algorithm_data.dict(exclude={'id', 'version', 'effective_date'})
+        algorithm_dict = algorithm_data.dict(exclude={'version', 'effective_date'})
         # Set default values for optional fields if None
         if algorithm_dict.get("calculation_steps") is None:
             algorithm_dict["calculation_steps"] = []
@@ -409,7 +405,7 @@ class AlgorithmService:
             raise ValueError("Algorithm with same ID already exists")
         
         # Create new record
-        algorithm_dict = algorithm_data.dict(exclude={'id', 'version', 'effective_date'})
+        algorithm_dict = algorithm_data.dict(exclude={'version', 'effective_date'})
         # Set default values for optional fields if None
         if algorithm_dict.get("calculation_steps") is None:
             algorithm_dict["calculation_steps"] = []
@@ -753,13 +749,9 @@ class AlgorithmService:
                 else:
                     effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # Auto-generate ID if not provided (outside transaction for sequence)
-                id_was_auto_generated = False
-                if algorithm_data.id is None or algorithm_data.id == 0:
-                    algorithm_id = await self._generate_algorithm_id()
-                    id_was_auto_generated = True
-                else:
-                    algorithm_id = algorithm_data.id
+                # Auto-generate ID
+                algorithm_id = await self._generate_algorithm_id()
+                id_was_auto_generated = True
                 
                 if use_transactions:
                     # Use transaction for each record's database write operations

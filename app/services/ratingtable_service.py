@@ -157,13 +157,9 @@ class RatingTableService:
         else:
             effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Auto-generate ID if not provided
-        id_was_auto_generated = False
-        if ratingtable_data.id is None or ratingtable_data.id == 0:
-            ratingtable_id = await self._generate_ratingtable_id()
-            id_was_auto_generated = True
-        else:
-            ratingtable_id = ratingtable_data.id
+        # Auto-generate ID
+        id_was_auto_generated = True
+        ratingtable_id = await self._generate_ratingtable_id()
         
         # Check if transactions are supported
         use_transactions = await self._check_transactions_supported()
@@ -338,7 +334,7 @@ class RatingTableService:
             raise ValueError("Rating table with same ID already exists")
         
         # Create new record
-        ratingtable_dict = ratingtable_data.dict(exclude={'id', 'version'})
+        ratingtable_dict = ratingtable_data.dict(exclude={'version'})
         ratingtable_dict["effective_date"] = effective_date
         ratingtable_dict.update({
             "id": ratingtable_id,
@@ -408,7 +404,7 @@ class RatingTableService:
             raise ValueError("Rating table with same ID already exists")
         
         # Create new record
-        ratingtable_dict = ratingtable_data.dict(exclude={'id', 'version'})
+        ratingtable_dict = ratingtable_data.dict(exclude={'version'})
         ratingtable_dict["effective_date"] = effective_date
         ratingtable_dict.update({
             "id": ratingtable_id,
@@ -698,12 +694,9 @@ class RatingTableService:
                 else:
                     effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # Auto-generate ID if not provided
-                if ratingtable_data.id is None or ratingtable_data.id == 0:
-                    ratingtable_id = await self._generate_ratingtable_id()
-                    id_was_auto_generated = True
-                else:
-                    ratingtable_id = ratingtable_data.id
+                # Auto-generate ID
+                ratingtable_id = await self._generate_ratingtable_id()
+                id_was_auto_generated = True
             
                 existing_table = None
                 data_comparison = None

@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     EMAILS_FROM_EMAIL: Optional[str] = None
     
+    # AI/Chat Assistant Settings
+    GEMINI_API_KEY: Optional[str] = "AIzaSyC2nzsj2lvX8wB_pWqVzHOH3M-31y6soSg"
+    GEMINI_MODEL_NAME: str = "gemini-2.0-flash-lite"
+    GEMINI_MAX_ITERATIONS: int = 5
+    MCP_BASE_URL: str = "http://localhost:8000/api/v1/mcp"
+    
     class Config:
         case_sensitive = True
         env_file = ".env"

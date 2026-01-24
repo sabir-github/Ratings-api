@@ -3,7 +3,6 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class AlgorithmCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Algorithm ID (optional, auto-generated if not provided)")
     algorithm_name: str = Field(..., description="Algorithm name (mandatory)")
     algorithm_type: Optional[str] = Field(None, description="Algorithm type (optional)")
     company: int = Field(..., description="Company ID (mandatory)")

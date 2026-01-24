@@ -25,7 +25,7 @@ class LobBase(BaseModel):
     active: bool = Field(..., description="Active status")
 
 class LobCreate(LobBase):
-    id: Optional[int] = Field(None, description="Lob ID (auto-generated if not provided)")
+    pass
 
 class LobUpdate(BaseModel):
     lob_name: Optional[str] = None
