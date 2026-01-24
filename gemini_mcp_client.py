@@ -47,18 +47,41 @@ class GeminiMCPClient:
         mcp_base_url: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
         model_name: Optional[str] = None,
+        max_iterations: Optional[int] = None,
     ):
         """
         Initialize the Gemini MCP Client.
         
+        Configuration is loaded from settings (which reads from .env file) in this priority:
+        1. Parameters passed to __init__ (highest priority)
+        2. Settings from .env file (via app.core.config.settings)
+        3. Environment variables (fallback)
+        4. Hardcoded defaults (lowest priority)
+        
         Args:
-            mcp_base_url: Base URL for the MCP server
-            gemini_api_key: Google Gemini API key (or set GEMINI_API_KEY env var)
-            model_name: Gemini model to use
+            mcp_base_url: Base URL for the MCP server (defaults to settings.MCP_BASE_URL from .env)
+            gemini_api_key: Google Gemini API key (defaults to settings.GEMINI_API_KEY from .env)
+            model_name: Gemini model to use (defaults to settings.GEMINI_MODEL_NAME from .env)
+            max_iterations: Maximum tool-calling iterations (defaults to settings.GEMINI_MAX_ITERATIONS from .env)
         """
-        # Use provided values or fall back to settings, then hardcoded defaults
-        self.mcp_base_url = mcp_base_url or (settings.MCP_BASE_URL if settings else "http://localhost:8000/api/v1/mcp")
-        self.requested_model_name = model_name or (settings.GEMINI_MODEL_NAME if settings else "gemini-2.0-flash-lite")
+        # Priority: parameter > settings from .env > environment variable > default
+        self.mcp_base_url = (
+            mcp_base_url 
+            or (settings.MCP_BASE_URL if settings else None)
+            or os.getenv("MCP_BASE_URL", "http://localhost:8000/api/v1/mcp")
+        )
+        
+        self.requested_model_name = (
+            model_name
+            or (settings.GEMINI_MODEL_NAME if settings else None)
+            or os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash-lite")
+        )
+        
+        self.max_iterations = (
+            max_iterations
+            or (settings.GEMINI_MAX_ITERATIONS if settings else None)
+            or int(os.getenv("GEMINI_MAX_ITERATIONS", "5"))
+        )
         
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
@@ -69,14 +92,22 @@ class GeminiMCPClient:
         self.tools_cache: List[Dict[str, Any]] = []
         self.model_name: Optional[str] = None
         
-        # Initialize Gemini
+        # Initialize Gemini - Priority: parameter > settings from .env > environment variable
         if GEMINI_AVAILABLE:
-            api_key = gemini_api_key or (settings.GEMINI_API_KEY if settings else None) or os.getenv("GEMINI_API_KEY")
+            api_key = (
+                gemini_api_key
+                or (settings.GEMINI_API_KEY if settings else None)
+                or os.getenv("GEMINI_API_KEY")
+            )
             if api_key:
                 genai.configure(api_key=api_key)
                 self.model = None
+                logger.debug(f"Gemini API configured using {'parameter' if gemini_api_key else 'settings/.env' if settings and settings.GEMINI_API_KEY else 'environment variable'}")
             else:
-                logger.warning("Gemini API key not provided. Set GEMINI_API_KEY env var or pass gemini_api_key.")
+                logger.warning(
+                    "Gemini API key not provided. "
+                    "Set GEMINI_API_KEY in .env file or pass gemini_api_key parameter."
+                )
                 self.model = None
         else:
             self.model = None
@@ -364,7 +395,7 @@ class GeminiMCPClient:
         self,
         prompt: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
-        max_iterations: int = 5
+        max_iterations: Optional[int] = None
     ) -> str:
         """
         Chat with Gemini, allowing it to use MCP tools.
@@ -373,10 +404,14 @@ class GeminiMCPClient:
             prompt: User prompt
             conversation_history: Previous conversation messages
             max_iterations: Maximum number of function call iterations
+                          (defaults to self.max_iterations from settings/.env)
             
         Returns:
             Gemini's response
         """
+        # Use provided max_iterations or fall back to instance value from settings/.env
+        if max_iterations is None:
+            max_iterations = self.max_iterations
         if not GEMINI_AVAILABLE:
             raise RuntimeError("google-generativeai not installed. Run: pip install google-generativeai")
 

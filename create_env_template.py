@@ -1,4 +1,24 @@
-# ============================================
+#!/usr/bin/env python3
+"""
+Non-interactive script to create .env template file.
+This creates a .env file with empty values that you can fill in.
+"""
+import secrets
+from pathlib import Path
+
+def create_env_template():
+    """Create .env template file with Gemini configurations"""
+    env_file = Path(".env")
+    
+    if env_file.exists():
+        print("⚠️  .env file already exists. Skipping creation.")
+        print("   If you want to recreate it, delete the existing file first.")
+        return
+    
+    # Generate a secure SECRET_KEY
+    secret_key = secrets.token_urlsafe(32)
+    
+    env_content = f"""# ============================================
 # Ratings API - Environment Configuration
 # ============================================
 # IMPORTANT: This file contains sensitive information
@@ -10,7 +30,7 @@
 # ============================================
 # A secure SECRET_KEY has been generated for you
 # You can regenerate: python -c "import secrets; print(secrets.token_urlsafe(32))"
-SECRET_KEY=pPUOPSKTTxsrUZ0QP6vkhhvEPe_Mf1XB7kxZkh31XUg
+SECRET_KEY={secret_key}
 
 # ============================================
 # Database Settings
@@ -80,3 +100,24 @@ EMAILS_FROM_EMAIL=
 # ============================================
 LOG_LEVEL=INFO
 # LOG_FILE=logs/app.log
+"""
+    
+    try:
+        with open(env_file, 'w') as f:
+            f.write(env_content)
+        print("✅ .env file created successfully!")
+        print(f"   Location: {env_file.absolute()}")
+        print("\n📝 Next steps:")
+        print("   1. Add your GEMINI_API_KEY (get it from https://makersuite.google.com/app/apikey)")
+        print("   2. Rotate the old exposed key: AIzaSyC2nzsj2lvX8wB_pWqVzHOH3M-31y6soSg")
+        print("   3. Update MONGODB_URL if needed")
+        print("   4. Set CORS_ALLOW_ALL_ORIGINS=true for development if needed")
+        print("\n⚠️  Remember:")
+        print("   - .env file is in .gitignore and will NOT be committed")
+        print("   - Keep this file secure and never share it publicly")
+    except Exception as e:
+        print(f"❌ Error creating .env file: {e}")
+
+if __name__ == "__main__":
+    create_env_template()
+

@@ -74,23 +74,25 @@ def get_chat_client() -> GeminiMCPClient:
             detail="Gemini MCP client not available. Install dependencies."
         )
     
-    # Get API key from config file (or environment variable as fallback)
-    api_key = settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
+    # Get Gemini configuration from settings (which reads from .env file)
+    api_key = settings.GEMINI_API_KEY
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Gemini API key not configured. Set GEMINI_API_KEY in config file or environment variable."
+            detail="Gemini API key not configured. Set GEMINI_API_KEY in .env file or environment variable."
         )
     
-    # Get model name from config file
+    # Get model name and MCP base URL from settings (from .env file)
     model_name = settings.GEMINI_MODEL_NAME
     mcp_base_url = settings.MCP_BASE_URL
+    max_iterations = settings.GEMINI_MAX_ITERATIONS
     
-    # Create new client for each request using config settings
+    # Create new client for each request using config settings from .env
     client = GeminiMCPClient(
         mcp_base_url=mcp_base_url,
         gemini_api_key=api_key,
-        model_name=model_name
+        model_name=model_name,
+        max_iterations=max_iterations
     )
     
     return client
@@ -125,16 +127,17 @@ async def chat(
         # Get conversation history
         conversation_history = conversation_histories.get(session_id, [])
         
-        # Get chat client (uses config file settings)
+        # Get chat client (uses settings from .env file)
         client = get_chat_client()
         
         # Initialize client
         async with client:
-            # Chat with Gemini (using max_iterations from config)
+            # Chat with Gemini (max_iterations comes from client instance, which reads from .env)
+            # Passing None uses the client's max_iterations from settings
             response_text = await client.chat_with_gemini(
                 prompt=chat_request.message,
                 conversation_history=conversation_history,
-                max_iterations=settings.GEMINI_MAX_ITERATIONS
+                max_iterations=None  # Uses self.max_iterations from settings/.env
             )
             
             # Update conversation history
@@ -299,7 +302,8 @@ async def chat_status():
     Returns:
         Service status information
     """
-    gemini_api_key_configured = bool(settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY"))
+    # Check if Gemini API key is configured (from .env file via settings)
+    gemini_api_key_configured = bool(settings.GEMINI_API_KEY)
     
     return {
         "status": "available" if GEMINI_MCP_AVAILABLE else "unavailable",
@@ -308,6 +312,7 @@ async def chat_status():
         "gemini_model_name": settings.GEMINI_MODEL_NAME,
         "gemini_max_iterations": settings.GEMINI_MAX_ITERATIONS,
         "active_sessions": len(conversation_histories),
-        "mcp_base_url": settings.MCP_BASE_URL
+        "mcp_base_url": settings.MCP_BASE_URL,
+        "configuration_source": ".env file via settings" if gemini_api_key_configured else "not configured"
     }
 

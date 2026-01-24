@@ -463,7 +463,7 @@ async def mcp_protocol(request: Request):
                     "get_algorithms", "get_algorithm", "create_algorithm", "update_algorithm", "delete_algorithm",
                     "get_ratingmanuals", "get_ratingmanual", "create_ratingmanual", "update_ratingmanual", "delete_ratingmanual",
                     "get_ratingplans", "get_ratingplan", "create_ratingplan", "update_ratingplan", "delete_ratingplan",
-                    "health_check"
+                    "health_check", "evaluate_expression"
                 ]
                 serialized_tools = [{"name": tool, "description": f"MCP tool: {tool}"} for tool in known_tools]
             

@@ -5,6 +5,27 @@ from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.api.v1.api import api_router
 import logging
+import sys
+import os
+
+# Configure logging
+# Set log level from environment variable or default to INFO
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Console output
+    ]
+)
+
+# Optionally add file handler if LOG_FILE is set
+log_file = os.getenv("LOG_FILE")
+if log_file:
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logging.getLogger().addHandler(file_handler)
+    logging.info(f"Logging to file: {log_file}")
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +55,15 @@ elif len(cors_origins) == 1 and cors_origins[0] == "*":
 
 if allow_all_origins:
     # Allow all origins (development mode) - credentials must be False
-    logger.warning("CORS: Allowing all origins - This should only be used in development!")
+    environment = settings.ENVIRONMENT.lower()
+    if environment == "production":
+        logger.error("SECURITY WARNING: CORS_ALLOW_ALL_ORIGINS is enabled in PRODUCTION!")
+        logger.error("This is a critical security vulnerability. Set CORS_ALLOW_ALL_ORIGINS=false")
+        raise ValueError("CORS_ALLOW_ALL_ORIGINS cannot be True in production environment")
+    else:
+        logger.warning("CORS: Allowing all origins - This should only be used in development!")
+        logger.warning("For production, set CORS_ALLOW_ALL_ORIGINS=false and configure specific origins")
+    
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
