@@ -160,24 +160,32 @@ class GeminiMCPClient:
             self.model_name = normalized_requested
             
             # System instruction to help Gemini provide better responses
-            system_instruction = (
-                "You are an expert Ratings API Assistant. Your goal is to help users interact with the Ratings API. "
-                "When users ask to fetch or list entities (like companies, products, etc.), you should provide "
-                "the full details returned by the tools unless they specifically ask for a summary. "
-                "Always include IDs, codes, names, and status (active/inactive) in your responses. "
-                "If many items are returned, you can use a table format for clarity.\n\n"
-                "IMPORTANT: When a user asks to create, update, or delete an entity, you must first verify "
-                "that you have all the required information. Refer to your available tools and their parameters "
-                "to see what details are needed (e.g., company_code, company_name, etc.). If any required "
-                "information is missing, do not call the tool. Instead, politely ask the user to provide the "
-                "specific missing details before proceeding."
-            )
+            #system_instruction = (
+            #    "You are an expert Ratings API Assistant. Your goal is to help users interact with the Ratings API. "
+            #    "When users ask to fetch or list entities (like companies, products, etc.), you should provide "
+            #    "the full details returned by the tools unless they specifically ask for a summary. "
+            #    "Always include IDs, codes, names, and status (active/inactive) in your responses. "
+            #    "If many items are returned, you can use a table format for clarity.\n\n"
+            #    "IMPORTANT: When a user asks to create, update, or delete an entity, you must first verify "
+            #   "that you have all the required information. Refer to your available tools and their parameters "
+            #   "to see what details are needed (e.g., company_code, company_name, etc.). If any required "
+            #   "information is missing, do not call the tool. Instead, politely ask the user to provide the "
+            #    "specific missing details before proceeding."
+            #)
+            system_instruction = None
             
-            self.model = genai.GenerativeModel(
-                model_name=normalized_requested,
-                system_instruction=system_instruction
-            )
-            logger.info(f"Using Gemini model: {normalized_requested} with system instruction")
+            # Only pass system_instruction if it's not None (Gemini SDK doesn't accept empty values)
+            if system_instruction:
+                self.model = genai.GenerativeModel(
+                    model_name=normalized_requested,
+                    system_instruction=system_instruction
+                )
+                logger.info(f"Using Gemini model: {normalized_requested} with system instruction")
+            else:
+                self.model = genai.GenerativeModel(
+                    model_name=normalized_requested
+                )
+                logger.info(f"Using Gemini model: {normalized_requested} without system instruction")
         except Exception as e:
             logger.error(f"Error initializing Gemini model: {e}")
             raise RuntimeError(f"Failed to initialize Gemini model '{self.requested_model_name}': {e}")
