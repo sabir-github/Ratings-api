@@ -97,6 +97,14 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await close_mongo_connection()
+    # Cleanup chat client if it exists
+    try:
+        from app.api.v1.endpoints.chat import cleanup_chat_client
+        await cleanup_chat_client()
+    except ImportError:
+        pass  # Chat endpoints may not be available
+    except Exception as e:
+        logger.warning(f"Error cleaning up chat client: {e}")
 
 # Include routers
 app.include_router(api_router, prefix=settings.API_V1_STR)

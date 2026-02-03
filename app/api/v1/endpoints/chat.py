@@ -55,24 +55,32 @@ class ChatHistoryResponse(BaseModel):
     message_count: int = Field(..., description="Number of messages in history")
 
 
-# Global client instance (lazy initialization)
+# Global client instance (kept active for the session)
 _chat_client: Optional[GeminiMCPClient] = None
+_client_initialized: bool = False
 
 
-def get_chat_client() -> GeminiMCPClient:
+async def get_chat_client() -> GeminiMCPClient:
     """
     Get or create a Gemini MCP client instance using config file settings.
     
+    The client is kept active across requests (singleton pattern).
+    Automatically loads mcp.json configuration if available, otherwise falls back to HTTP.
+    
     Returns:
-        GeminiMCPClient instance
+        GeminiMCPClient instance (reused across requests)
     """
-    global _chat_client
+    global _chat_client, _client_initialized
     
     if not GEMINI_MCP_AVAILABLE:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Gemini MCP client not available. Install dependencies."
         )
+    
+    # Return existing client if already initialized
+    if _chat_client is not None and _client_initialized:
+        return _chat_client
     
     # Get Gemini configuration from settings (which reads from .env file)
     api_key = settings.GEMINI_API_KEY
@@ -82,20 +90,38 @@ def get_chat_client() -> GeminiMCPClient:
             detail="Gemini API key not configured. Set GEMINI_API_KEY in .env file or environment variable."
         )
     
-    # Get model name and MCP base URL from settings (from .env file)
+    # Get model name and max iterations from settings (from .env file)
     model_name = settings.GEMINI_MODEL_NAME
-    mcp_base_url = settings.MCP_BASE_URL
     max_iterations = settings.GEMINI_MAX_ITERATIONS
     
-    # Create new client for each request using config settings from .env
-    client = GeminiMCPClient(
-        mcp_base_url=mcp_base_url,
+    # MCP base URL is optional (only used if mcp.json not found)
+    mcp_base_url = settings.MCP_BASE_URL
+    
+    # Create client - it will automatically try to load mcp.json config first
+    # If mcp.json is found, it uses stdio connection; otherwise falls back to HTTP
+    _chat_client = GeminiMCPClient(
+        mcp_base_url=mcp_base_url,  # Fallback URL if mcp.json not found
         gemini_api_key=api_key,
         model_name=model_name,
         max_iterations=max_iterations
     )
     
-    return client
+    # Initialize the client (connect to MCP server, load tools)
+    try:
+        await _chat_client.initialize()
+        await _chat_client.list_tools()
+        _client_initialized = True
+        logger.info("Gemini MCP client initialized and kept active for session")
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini MCP client: {e}", exc_info=True)
+        _chat_client = None
+        _client_initialized = False
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initialize Gemini MCP client: {str(e)}"
+        )
+    
+    return _chat_client
 
 
 @router.post("/", response_model=ChatResponse, status_code=status.HTTP_200_OK)
@@ -127,35 +153,33 @@ async def chat(
         # Get conversation history
         conversation_history = conversation_histories.get(session_id, [])
         
-        # Get chat client (uses settings from .env file)
-        client = get_chat_client()
+        # Get chat client (reused across requests, kept active)
+        client = await get_chat_client()
         
-        # Initialize client
-        async with client:
-            # Chat with Gemini (max_iterations comes from client instance, which reads from .env)
-            # Passing None uses the client's max_iterations from settings
-            response_text = await client.chat_with_gemini(
-                prompt=chat_request.message,
-                conversation_history=conversation_history,
-                max_iterations=None  # Uses self.max_iterations from settings/.env
-            )
-            
-            # Update conversation history
-            conversation_history.append({
-                "role": "user",
-                "parts": [{"text": chat_request.message}]
-            })
-            conversation_history.append({
-                "role": "model",
-                "parts": [{"text": response_text}]
-            })
-            conversation_histories[session_id] = conversation_history
-            
-            return ChatResponse(
-                response=response_text,
-                session_id=session_id,
-                model_used=client.model_name or settings.GEMINI_MODEL_NAME
-            )
+        # Chat with Gemini (max_iterations comes from client instance, which reads from .env)
+        # Passing None uses the client's max_iterations from settings
+        response_text = await client.chat_with_gemini(
+            prompt=chat_request.message,
+            conversation_history=conversation_history,
+            max_iterations=None  # Uses self.max_iterations from settings/.env
+        )
+        
+        # Update conversation history
+        conversation_history.append({
+            "role": "user",
+            "parts": [{"text": chat_request.message}]
+        })
+        conversation_history.append({
+            "role": "model",
+            "parts": [{"text": response_text}]
+        })
+        conversation_histories[session_id] = conversation_history
+        
+        return ChatResponse(
+            response=response_text,
+            session_id=session_id,
+            model_used=client.model_name or settings.GEMINI_MODEL_NAME
+        )
             
     except HTTPException:
         raise
@@ -195,32 +219,31 @@ async def chat_stream(
             session_id = chat_request.session_id or f"session_{os.urandom(8).hex()}"
             conversation_history = conversation_histories.get(session_id, [])
             
-            # Get chat client (uses config file settings)
-            client = get_chat_client()
+            # Get chat client (reused across requests, kept active)
+            client = await get_chat_client()
             
-            async with client:
-                # For now, send complete response (streaming can be enhanced later)
-                # Using max_iterations from config
-                response_text = await client.chat_with_gemini(
-                    prompt=chat_request.message,
-                    conversation_history=conversation_history,
-                    max_iterations=settings.GEMINI_MAX_ITERATIONS
-                )
-                
-                # Update conversation history
-                conversation_history.append({
-                    "role": "user",
-                    "parts": [{"text": chat_request.message}]
-                })
-                conversation_history.append({
-                    "role": "model",
-                    "parts": [{"text": response_text}]
-                })
-                conversation_histories[session_id] = conversation_history
-                
-                # Send response as SSE event
-                yield f"data: {JSONResponse(content={'response': response_text, 'session_id': session_id}).body.decode()}\n\n"
-                yield "data: [DONE]\n\n"
+            # For now, send complete response (streaming can be enhanced later)
+            # Using max_iterations from config
+            response_text = await client.chat_with_gemini(
+                prompt=chat_request.message,
+                conversation_history=conversation_history,
+                max_iterations=settings.GEMINI_MAX_ITERATIONS
+            )
+            
+            # Update conversation history
+            conversation_history.append({
+                "role": "user",
+                "parts": [{"text": chat_request.message}]
+            })
+            conversation_history.append({
+                "role": "model",
+                "parts": [{"text": response_text}]
+            })
+            conversation_histories[session_id] = conversation_history
+            
+            # Send response as SSE event
+            yield f"data: {JSONResponse(content={'response': response_text, 'session_id': session_id}).body.decode()}\n\n"
+            yield "data: [DONE]\n\n"
                 
         except Exception as e:
             logger.error(f"Error in chat stream: {e}", exc_info=True)
@@ -313,6 +336,22 @@ async def chat_status():
         "gemini_max_iterations": settings.GEMINI_MAX_ITERATIONS,
         "active_sessions": len(conversation_histories),
         "mcp_base_url": settings.MCP_BASE_URL,
+        "client_initialized": _client_initialized,
         "configuration_source": ".env file via settings" if gemini_api_key_configured else "not configured"
     }
+
+
+# Cleanup function for chat client (called on app shutdown)
+async def cleanup_chat_client():
+    """Close the global chat client on application shutdown."""
+    global _chat_client, _client_initialized
+    if _chat_client is not None:
+        try:
+            await _chat_client.close()
+            logger.info("Chat client closed on application shutdown")
+        except Exception as e:
+            logger.warning(f"Error closing chat client: {e}")
+        finally:
+            _chat_client = None
+            _client_initialized = False
 

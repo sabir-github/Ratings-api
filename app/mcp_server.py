@@ -126,7 +126,7 @@ if MCP_AVAILABLE and mcp is not None:
         Purpose:
         Retrieves insurance companies from the system. Companies are the top-level entities
         in the ratings hierarchy and represent insurance carriers or organizations that
-        provide insurance products. Use this tool to browse, search, or filter companies
+        provide insurance products. Use this tool to browse, search, or filter companies by name
         when setting up rating configurations or managing company data.
         
         Usage Examples:
@@ -187,52 +187,52 @@ if MCP_AVAILABLE and mcp is not None:
             logger.error(f"Error getting companies: {e}")
             return {"error": str(e), "status_code": 500}
 
-    @mcp.tool()
-    async def get_company(company_id: int) -> Dict[str, Any]:
-        """
-        Get detailed information about a specific company by its ID.
-        
-        Purpose:
-        Retrieves complete details for a single insurance company. Use this when you
-        have a company ID and need to verify its details, check its active status,
-        or retrieve its information for use in other operations.
-        
-        Usage Examples:
-        - Get company with ID 1: company_id=1
-        - Verify company exists before updating: get_company(5) to check if company 5 exists
-        - Retrieve company details for display: get_company(company_id)
-        
-        Args:
-            company_id: The unique integer ID of the company to retrieve.
-            
-        Returns:
-            Company object with fields:
-            - id: Unique integer identifier
-            - company_code: Short code (e.g., 'ABC', 'GLOB')
-            - company_name: Full legal name
-            - active: Boolean indicating if company is active
-            - created_at: Timestamp of creation
-            - updated_at: Timestamp of last update
-            
-        When to Use:
-        - User provides a company ID and asks for details
-        - Need to verify company exists before creating related entities
-        - Displaying company information in responses
-        - Checking company status before operations
-        """
-        try:
-            result = await company_service.get_company(company_id)
-            if result is None:
-                return {"error": f"Company with ID {company_id} not found", "status_code": 404}
-            # Convert Pydantic model to dict (compatible with v1 and v2)
-            if hasattr(result, 'model_dump'):
-                return result.model_dump()
-            elif hasattr(result, 'dict'):
-                return result.dict()
-            return result
-        except Exception as e:
-            logger.error(f"Error getting company: {e}")
-            return {"error": str(e), "status_code": 500}
+    # @mcp.tool()
+    # async def get_company(company_id: int) -> Dict[str, Any]:
+    #     """
+    #     Get detailed information about a specific company by its ID.
+    #     
+    #     Purpose:
+    #     Retrieves complete details for a single insurance company. Use this when you
+    #     have a company ID and need to verify its details, check its active status,
+    #     or retrieve its information for use in other operations.
+    #     
+    #     Usage Examples:
+    #     - Get company with ID 1: company_id=1
+    #     - Verify company exists before updating: get_company(5) to check if company 5 exists
+    #     - Retrieve company details for display: get_company(company_id)
+    #     
+    #     Args:
+    #         company_id: The unique integer ID of the company to retrieve.
+    #         
+    #     Returns:
+    #         Company object with fields:
+    #         - id: Unique integer identifier
+    #         - company_code: Short code (e.g., 'ABC', 'GLOB')
+    #         - company_name: Full legal name
+    #         - active: Boolean indicating if company is active
+    #         - created_at: Timestamp of creation
+    #         - updated_at: Timestamp of last update
+    #         
+    #     When to Use:
+    #     - User provides a company ID and asks for details
+    #     - Need to verify company exists before creating related entities
+    #     - Displaying company information in responses
+    #     - Checking company status before operations
+    #     """
+    #     try:
+    #         result = await company_service.get_company(company_id)
+    #         if result is None:
+    #             return {"error": f"Company with ID {company_id} not found", "status_code": 404}
+    #         # Convert Pydantic model to dict (compatible with v1 and v2)
+    #         if hasattr(result, 'model_dump'):
+    #             return result.model_dump()
+    #         elif hasattr(result, 'dict'):
+    #             return result.dict()
+    #         return result
+    #     except Exception as e:
+    #         logger.error(f"Error getting company: {e}")
+    #         return {"error": str(e), "status_code": 500}
 
     @mcp.tool()
     async def create_company(
@@ -2078,7 +2078,8 @@ if MCP_AVAILABLE and mcp is not None:
     import sys
     current_module = sys.modules[__name__]
     known_tool_names = [
-        'get_companies', 'get_company', 'create_company', 'update_company', 'delete_company',
+        'get_companies', 'create_company', 'update_company', 'delete_company',
+        # 'get_company',  # Commented out - not in tools list
         'get_lobs', 'get_lob', 'create_lob', 'update_lob', 'delete_lob',
         'get_products', 'get_product', 'create_product', 'update_product', 'delete_product',
         'get_states', 'get_state', 'create_state', 'update_state', 'delete_state',

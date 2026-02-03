@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "ratings-api": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "ratings-api-api-1",
+        "python",
+        "/app/run_mcp_server.py"
+      ],
+      "env": {
+        "API_URL": "http://localhost:8000",
+        "MONGODB_URL": "mongodb://admin:password@localhost:37017/?authSource=admin",
+        "MONGODB_DB_NAME": "ratings_db",
+        "PYTHONPATH": "/app"
+      }
+    }
+  }
+}
+
