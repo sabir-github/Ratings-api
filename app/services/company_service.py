@@ -6,6 +6,7 @@ from app.core.database import get_database, get_next_sequence_value
 from app.schemas.company import CompanyCreateSchema, CompanyUpdateSchema
 from app.models.company import CompanyResponse
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +72,17 @@ class CompanyService:
             if "active" in filter_by:
                 query["active"] = filter_by["active"]
             if "company_name" in filter_by:
-                query["company_name"] = {"$regex": filter_by["company_name"], "$options": "i"}
+                # Use anchored regex (^) for better index utilization
+                # This allows MongoDB to use the company_name index efficiently
+                company_name_filter = filter_by["company_name"]
+                # Escape special regex characters to prevent injection
+                escaped_name = re.escape(company_name_filter)
+                query["company_name"] = {"$regex": f"^{escaped_name}", "$options": "i"}
             if "company_code" in filter_by:
-                query["company_code"] = {"$regex": filter_by["company_code"], "$options": "i"}
+                # Use anchored regex (^) for better index utilization
+                company_code_filter = filter_by["company_code"]
+                escaped_code = re.escape(company_code_filter)
+                query["company_code"] = {"$regex": f"^{escaped_code}", "$options": "i"}
         
         # Build sort
         sort = []
@@ -119,7 +128,10 @@ class CompanyService:
             if "active" in filter_by:
                 query["active"] = filter_by["active"]
             if "company_name" in filter_by:
-                query["company_name"] = {"$regex": filter_by["company_name"], "$options": "i"}
+                # Use anchored regex (^) for better index utilization
+                company_name_filter = filter_by["company_name"]
+                escaped_name = re.escape(company_name_filter)
+                query["company_name"] = {"$regex": f"^{escaped_name}", "$options": "i"}
         
         return await collection.count_documents(query)
 

@@ -10,9 +10,10 @@ from app.core.config import settings
 
 # Import services for direct calls (more efficient than HTTP)
 from app.services.company_service import company_service
-from app.services.evaluate_expression import evaluate_expression
+from app.services.evaluate_expression import evaluate_expression as evaluate_expression_service
 from app.schemas.company import CompanyCreateSchema, CompanyUpdateSchema
 from app.schemas.calculation import CalculationRequest
+from app.core.database import get_database
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,15 @@ async def call_api(method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+# Helper function to ensure database is initialized before tool execution
+async def ensure_database_initialized():
+    """Ensure database connection is initialized (lazy initialization)"""
+    try:
+        await get_database()
+    except Exception as e:
+        logger.warning(f"Database initialization warning: {e}")
+        # Don't raise - let the tool handle the error
+
 # Tool registry for HTTP access (maps tool names to functions)
 # This allows tools to be called via HTTP endpoints even if _tools is not populated
 TOOL_REGISTRY = {}
@@ -158,34 +168,13 @@ if MCP_AVAILABLE and mcp is not None:
         - Setting up rating configurations that require company selection
         - Verifying company exists before creating related entities (LOBs, products, etc.)
         """
-        try:
-            # Cap limit to prevent excessive data transfer
-            limit = min(limit, 1000)
-            filter_by = {}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                filter_by["active"] = active_bool
-            if company_name:
-                filter_by["company_name"] = company_name
-            
-            results = await company_service.get_companies(
-                skip=skip,
-                limit=limit,
-                filter_by=filter_by if filter_by else None
-            )
-            # Convert to list of dicts (compatible with Pydantic v1 and v2)
-            items = []
-            for r in results:
-                if hasattr(r, 'model_dump'):
-                    items.append(r.model_dump())
-                elif hasattr(r, 'dict'):
-                    items.append(r.dict())
-                else:
-                    items.append(r)
-            return {"items": items, "count": len(items)}
-        except Exception as e:
-            logger.error(f"Error getting companies: {e}")
-            return {"error": str(e), "status_code": 500}
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if company_name:
+            params["company_name"] = company_name
+        return await call_api("GET", "/companies/", params=params)
 
     # @mcp.tool()
     # async def get_company(company_id: int) -> Dict[str, Any]:
@@ -278,6 +267,9 @@ if MCP_AVAILABLE and mcp is not None:
         - Company name should be the full legal name
         """
         try:
+            # Ensure database is initialized (for stdio MCP connections)
+            await ensure_database_initialized()
+            
             logger.info(f"Creating company with code={company_code}, name={company_name}, active={active}")
             # Convert parameters to schema and call service directly (avoids auth issues)
             company_schema = CompanyCreateSchema(
@@ -348,6 +340,9 @@ if MCP_AVAILABLE and mcp is not None:
         - Company ID cannot be changed
         """
         try:
+            # Ensure database is initialized (for stdio MCP connections)
+            await ensure_database_initialized()
+            
             update_schema = CompanyUpdateSchema(**company_data)
             result = await company_service.update_company(company_id, update_schema)
             if result is None:
@@ -398,6 +393,9 @@ if MCP_AVAILABLE and mcp is not None:
         - Always verify company ID before deletion
         """
         try:
+            # Ensure database is initialized (for stdio MCP connections)
+            await ensure_database_initialized()
+            
             result = await company_service.delete_company(company_id)
             if not result:
                 return {"error": f"Company with ID {company_id} not found", "status_code": 404}
@@ -461,29 +459,29 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", "/lobs/", params=params)
 
 
-    @mcp.tool()
-    async def get_lob(lob_id: int) -> Dict[str, Any]:
-        """
-        Get detailed information about a specific line of business by its ID.
-        
-        Purpose:
-        Retrieves complete details for a single LOB. Use this when you have a LOB ID
-        and need to verify its details, check its active status, or retrieve its
-        information for use in other operations.
-        
-        Args:
-            lob_id: The unique integer ID of the LOB to retrieve.
-            
-        Returns:
-            LOB object with fields: id, lob_code, lob_name, lob_abbreviation, active,
-            created_at, updated_at.
-            
-        When to Use:
-        - User provides a LOB ID and asks for details
-        - Need to verify LOB exists before creating related entities
-        - Displaying LOB information in responses
-        """
-        return await call_api("GET", f"/lobs/{lob_id}")
+    # @mcp.tool()
+    # async def get_lob(lob_id: int) -> Dict[str, Any]:
+    #     """
+    #     Get detailed information about a specific line of business by its ID.
+    #     
+    #     Purpose:
+    #     Retrieves complete details for a single LOB. Use this when you have a LOB ID
+    #     and need to verify its details, check its active status, or retrieve its
+    #     information for use in other operations.
+    #     
+    #     Args:
+    #         lob_id: The unique integer ID of the LOB to retrieve.
+    #         
+    #     Returns:
+    #         LOB object with fields: id, lob_code, lob_name, lob_abbreviation, active,
+    #         created_at, updated_at.
+    #         
+    #     When to Use:
+    #     - User provides a LOB ID and asks for details
+    #     - Need to verify LOB exists before creating related entities
+    #     - Displaying LOB information in responses
+    #     """
+    #     return await call_api("GET", f"/lobs/{lob_id}")
 
 
     @mcp.tool()
@@ -628,27 +626,27 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", "/products/", params=params)
 
 
-    @mcp.tool()
-    async def get_product(product_id: int) -> Dict[str, Any]:
-        """
-        Get detailed information about a specific product by its ID.
-        
-        Purpose:
-        Retrieves complete details for a single product. Use this when you have a product ID
-        and need to verify its details, check its LOB association, or retrieve its information.
-        
-        Args:
-            product_id: The unique integer ID of the product to retrieve.
-            
-        Returns:
-            Product object with fields: id, product_code, product_name, lob_id, active,
-            created_at, updated_at.
-            
-        When to Use:
-        - User provides a product ID and asks for details
-        - Need to verify product exists before creating rating configurations
-        """
-        return await call_api("GET", f"/products/{product_id}")
+    # @mcp.tool()
+    # async def get_product(product_id: int) -> Dict[str, Any]:
+    #     """
+    #     Get detailed information about a specific product by its ID.
+    #     
+    #     Purpose:
+    #     Retrieves complete details for a single product. Use this when you have a product ID
+    #     and need to verify its details, check its LOB association, or retrieve its information.
+    #     
+    #     Args:
+    #         product_id: The unique integer ID of the product to retrieve.
+    #         
+    #     Returns:
+    #         Product object with fields: id, product_code, product_name, lob_id, active,
+    #         created_at, updated_at.
+    #         
+    #     When to Use:
+    #     - User provides a product ID and asks for details
+    #     - Need to verify product exists before creating rating configurations
+    #     """
+    #     return await call_api("GET", f"/products/{product_id}")
 
 
     @mcp.tool()
@@ -785,26 +783,26 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", "/states/", params=params)
 
 
-    @mcp.tool()
-    async def get_state(state_id: int) -> Dict[str, Any]:
-        """
-        Get detailed information about a specific state by its ID.
-        
-        Purpose:
-        Retrieves complete details for a single US state. Use this when you have
-        a state ID and need to verify its details or retrieve its information.
-        
-        Args:
-            state_id: The unique integer ID of the state to retrieve.
-            
-        Returns:
-            State object with fields: id, state_code (2-letter), state_name, active.
-            
-        When to Use:
-        - User provides a state ID and asks for details
-        - Need to verify state exists before creating rating configurations
-        """
-        return await call_api("GET", f"/states/{state_id}")
+    # @mcp.tool()
+    # async def get_state(state_id: int) -> Dict[str, Any]:
+    #     """
+    #     Get detailed information about a specific state by its ID.
+    #     
+    #     Purpose:
+    #     Retrieves complete details for a single US state. Use this when you have
+    #     a state ID and need to verify its details or retrieve its information.
+    #     
+    #     Args:
+    #         state_id: The unique integer ID of the state to retrieve.
+    #         
+    #     Returns:
+    #         State object with fields: id, state_code (2-letter), state_name, active.
+    #         
+    #     When to Use:
+    #     - User provides a state ID and asks for details
+    #     - Need to verify state exists before creating rating configurations
+    #     """
+    #     return await call_api("GET", f"/states/{state_id}")
 
 
     @mcp.tool()
@@ -939,26 +937,26 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", "/contexts/", params=params)
 
 
-    @mcp.tool()
-    async def get_context(context_id: int) -> Dict[str, Any]:
-        """
-        Get detailed information about a specific context by its ID.
-        
-        Purpose:
-        Retrieves complete details for a single rating context. Use this when you have
-        a context ID and need to verify its details or retrieve its information.
-        
-        Args:
-            context_id: The unique integer ID of the context to retrieve.
-            
-        Returns:
-            Context object with fields: id, context_name, active, created_at, updated_at.
-            
-        When to Use:
-        - User provides a context ID and asks for details
-        - Need to verify context exists before creating rating configurations
-        """
-        return await call_api("GET", f"/contexts/{context_id}")
+    # @mcp.tool()
+    # async def get_context(context_id: int) -> Dict[str, Any]:
+    #     """
+    #     Get detailed information about a specific context by its ID.
+    #     
+    #     Purpose:
+    #     Retrieves complete details for a single rating context. Use this when you have
+    #     a context ID and need to verify its details or retrieve its information.
+    #     
+    #     Args:
+    #         context_id: The unique integer ID of the context to retrieve.
+    #         
+    #     Returns:
+    #         Context object with fields: id, context_name, active, created_at, updated_at.
+    #         
+    #     When to Use:
+    #     - User provides a context ID and asks for details
+    #     - Need to verify context exists before creating rating configurations
+    #     """
+    #     return await call_api("GET", f"/contexts/{context_id}")
 
 
     @mcp.tool()
@@ -2048,7 +2046,7 @@ if MCP_AVAILABLE and mcp is not None:
         """
         try:
             logger.info(f"MCP tool: Evaluating expression '{expression}' with variables {variables}")
-            result = evaluate_expression.evaluate(expression, variables)
+            result = evaluate_expression_service.evaluate(expression, variables)
             return {
                 "result": result,
                 "expression": expression,
@@ -2080,10 +2078,14 @@ if MCP_AVAILABLE and mcp is not None:
     known_tool_names = [
         'get_companies', 'create_company', 'update_company', 'delete_company',
         # 'get_company',  # Commented out - not in tools list
-        'get_lobs', 'get_lob', 'create_lob', 'update_lob', 'delete_lob',
-        'get_products', 'get_product', 'create_product', 'update_product', 'delete_product',
-        'get_states', 'get_state', 'create_state', 'update_state', 'delete_state',
-        'get_contexts', 'get_context', 'create_context', 'update_context', 'delete_context',
+        'get_lobs', 'create_lob', 'update_lob', 'delete_lob',
+        # 'get_lob',  # Commented out
+        'get_products', 'create_product', 'update_product', 'delete_product',
+        # 'get_product',  # Commented out
+        'get_states', 'create_state', 'update_state', 'delete_state',
+        # 'get_state',  # Commented out
+        'get_contexts', 'create_context', 'update_context', 'delete_context',
+        # 'get_context',  # Commented out
         'get_ratingtables', 'get_ratingtable', 'create_ratingtable', 'update_ratingtable', 'delete_ratingtable',
         'get_algorithms', 'get_algorithm', 'create_algorithm', 'update_algorithm', 'delete_algorithm',
         'get_ratingmanuals', 'get_ratingmanual', 'create_ratingmanual', 'update_ratingmanual', 'delete_ratingmanual',
