@@ -74,19 +74,37 @@ async def close_mongo_connection():
         logger.info("MongoDB connection closed")
 
 async def get_database() -> AsyncIOMotorClient:
-    """Get database instance, raising error if not connected"""
+    """Get database instance, raising error if not connected. Auto-initializes if needed."""
+    # Lazy initialization: if not connected, try to connect
     if not mongodb.connected or mongodb.database is None:
-        raise ConnectionFailure(
-            "Database not connected. Please ensure MongoDB is running and the connection was established."
-        )
+        try:
+            # Check if client exists but not connected
+            if mongodb.client is None:
+                await connect_to_mongo()
+            else:
+                # Client exists, verify connection
+                await verify_connection()
+        except Exception as e:
+            raise ConnectionFailure(
+                f"Database not connected. Please ensure MongoDB is running and the connection was established. Error: {e}"
+            )
     return mongodb.database
 
 async def get_client() -> AsyncIOMotorClient:
-    """Get MongoDB client instance for transactions, raising error if not connected"""
+    """Get MongoDB client instance for transactions, raising error if not connected. Auto-initializes if needed."""
+    # Lazy initialization: if not connected, try to connect
     if not mongodb.connected or mongodb.client is None:
-        raise ConnectionFailure(
-            "Database not connected. Please ensure MongoDB is running and the connection was established."
-        )
+        try:
+            # Check if client exists but not connected
+            if mongodb.client is None:
+                await connect_to_mongo()
+            else:
+                # Client exists, verify connection
+                await verify_connection()
+        except Exception as e:
+            raise ConnectionFailure(
+                f"Database not connected. Please ensure MongoDB is running and the connection was established. Error: {e}"
+            )
     return mongodb.client
 
 async def create_counter_collection():

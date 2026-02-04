@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # Format: mongodb://username:password@host:port/?authSource=admin
     # For local development: mongodb://localhost:27017 (no auth)
     # For production: mongodb://user:pass@host:port/?authSource=admin
-    MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+    MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:37017")
     MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "ratings_db")
     DATABASE_NAME: str = os.getenv("DATABASE_NAME", "motor_management")
     
