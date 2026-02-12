@@ -22,13 +22,47 @@ class RatingManualCreateSchema(BaseModel):
         if len(v) > 200:
             raise ValueError('Manual name cannot exceed 200 characters')
         return v.strip()
-    
+
+    @validator('company', 'lob', 'state', 'product', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('company', 'lob', 'state', 'product')
     def validate_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
         return v
-    
+
+    @validator('ratingtable', pre=True)
+    def coerce_ratingtable_ids(cls, v):
+        """Accept list of string or int IDs and coerce to list of int."""
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, int):
+                out.append(item)
+            elif isinstance(item, str):
+                try:
+                    out.append(int(item.strip()))
+                except ValueError:
+                    out.append(item)
+            else:
+                out.append(item)
+        return out
+
     @validator('ratingtable')
     def validate_ratingtable(cls, v):
         if v is None:
@@ -42,6 +76,20 @@ class RatingManualCreateSchema(BaseModel):
                 raise ValueError('All rating table IDs must be positive integers')
         return v
     
+    @validator('priority', pre=True)
+    def coerce_priority(cls, v):
+        """Accept string numbers and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('priority')
     def validate_priority(cls, v):
         if not isinstance(v, int):

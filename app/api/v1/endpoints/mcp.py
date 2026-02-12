@@ -574,7 +574,14 @@ async def mcp_protocol(request: Request):
                     logger.debug(f"Tool function signature: {sig}")
                     logger.debug(f"Tool args received: {tool_args}")
                     
-                    result = await tool_func(**tool_args)
+                    try:
+                        result = await tool_func(**tool_args)
+                    except TypeError as e:
+                        # Some MCP wrappers expect (tool_name, arguments) instead of **kwargs
+                        try:
+                            result = await tool_func(tool_name, tool_args)
+                        except Exception:
+                            raise e
                     logger.debug(f"Tool {tool_name} returned: {type(result)}")
                     
                     # Check if result is an error dict (from old error handling)

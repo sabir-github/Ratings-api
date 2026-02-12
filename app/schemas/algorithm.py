@@ -25,13 +25,47 @@ class AlgorithmCreateSchema(BaseModel):
         if len(v) > 200:
             raise ValueError('Algorithm name cannot exceed 200 characters')
         return v.strip()
-    
+
+    @validator('company', 'lob', 'state', 'product', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('company', 'lob', 'state', 'product')
     def validate_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
         return v
-    
+
+    @validator('required_tables', pre=True)
+    def coerce_required_tables(cls, v):
+        """Accept list of string or int IDs and coerce to list of int."""
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, int):
+                out.append(item)
+            elif isinstance(item, str):
+                try:
+                    out.append(int(item.strip()))
+                except ValueError:
+                    out.append(item)
+            else:
+                out.append(item)
+        return out
+
     @validator('required_tables')
     def validate_required_tables(cls, v):
         if v is None:

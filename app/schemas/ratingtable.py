@@ -25,7 +25,21 @@ class RatingTableCreateSchema(BaseModel):
         if len(v) > 100:
             raise ValueError('Table name cannot exceed 100 characters')
         return v.strip()
-    
+
+    @validator('company', 'lob', 'state', 'product', 'context', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('company')
     def validate_company(cls, v):
         if not isinstance(v, int):

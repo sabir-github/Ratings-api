@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash-lite")
     GEMINI_MAX_ITERATIONS: int = int(os.getenv("GEMINI_MAX_ITERATIONS", "5"))
     MCP_BASE_URL: str = os.getenv("MCP_BASE_URL", "http://localhost:8000/api/v1/mcp")
+    # Generation config (aligned with Gemini CLI chat-base defaults)
+    # See https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html
+    GEMINI_TEMPERATURE: float = float(os.getenv("GEMINI_TEMPERATURE", "0.7"))
+    GEMINI_TOP_P: float = float(os.getenv("GEMINI_TOP_P", "1.0"))
+    GEMINI_TOP_K: int = int(os.getenv("GEMINI_TOP_K", "40"))
+    GEMINI_MAX_OUTPUT_TOKENS: int = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
     
     # Environment Settings
     # Set to "production" for production deployments, "development" for development

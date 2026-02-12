@@ -31,6 +31,72 @@ router = APIRouter()
 # In-memory storage for conversation histories (in production, use Redis or database)
 conversation_histories: Dict[str, List[Dict[str, Any]]] = {}
 
+# Fixed greeting so the model always shows the same welcome message
+GREETING_MESSAGE = (
+    "Hello! I'm InsureAI, your insurance rating assistant. "
+    "I can help you with insurance rating, premium calculation, and test case validation using data from the system. "
+    "You can ask me to list companies, states, LOBs, products, rating tables, or to evaluate expressions. How can I help you today?"
+)
+
+def _is_greeting_or_empty(message: str) -> bool:
+    """True if the user message is empty or a simple greeting (we respond with fixed GREETING_MESSAGE)."""
+    if not message or not message.strip():
+        return True
+    normalized = message.strip().lower()
+    greetings = ("hi", "hello", "hey", "good morning", "good afternoon", "good evening", "hi there", "hello there", "greetings")
+    return normalized in greetings or normalized.startswith(("hi ", "hello "))
+
+
+def _is_list_states_request(message: str) -> bool:
+    """True if the user is asking to list states (we call get_states directly so response is from system only)."""
+    if not message or not message.strip():
+        return False
+    normalized = message.strip().lower()
+    if "state" not in normalized:
+        return False
+    list_verbs = ("list", "show", "get", "display", "give me", "what are", "which are")
+    if any(normalized.startswith(v) or f" {v} " in f" {normalized} " for v in list_verbs):
+        return True
+    if normalized in ("states", "list states", "list all states"):
+        return True
+    # "what states...", "which states...", "states available", etc.
+    if "states" in normalized and any(p in normalized for p in ("what", "which", "available", "have", "support")):
+        return True
+    return False
+
+
+def _is_list_companies_request(message: str) -> bool:
+    """True if the user is asking to list companies (we call get_companies directly so response is from system only)."""
+    if not message or not message.strip():
+        return False
+    normalized = message.strip().lower()
+    if "compan" not in normalized:
+        return False
+    list_verbs = ("list", "show", "get", "display", "give me", "what are", "which are")
+    return any(normalized.startswith(v) or f" {v} " in f" {normalized} " for v in list_verbs) or normalized in ("companies", "list companies", "list all companies")
+
+
+def _format_list_tool_result(tool_name: str, tool_result: Dict[str, Any]) -> str:
+    """Format get_states/get_companies (or similar) tool result as readable text. Uses system data only."""
+    if isinstance(tool_result, dict) and tool_result.get("error"):
+        return f"Error: {tool_result.get('error', 'Unknown')}"
+    items = tool_result.get("items") if isinstance(tool_result, dict) else None
+    count = tool_result.get("count") if isinstance(tool_result, dict) else None
+    if items is not None and isinstance(items, list):
+        n = count if count is not None else len(items)
+        header = f"Here are the results from the system ({n} item(s)):\n\n"
+        lines = []
+        for i, row in enumerate(items[:100], 1):
+            if isinstance(row, dict):
+                parts = [f"{k}={v}" for k, v in list(row.items())[:8]]
+                lines.append(f"  {i}. " + ", ".join(parts))
+            else:
+                lines.append(f"  {i}. {row}")
+        if items and len(items) > 100:
+            lines.append(f"  ... and {len(items) - 100} more")
+        return header + "\n".join(lines) if lines else header + "(No items returned.)"
+    return str(tool_result)[:2000]
+
 
 # Pydantic models for request/response
 class ChatMessage(BaseModel):
@@ -153,32 +219,62 @@ async def chat(
         # Get conversation history
         conversation_history = conversation_histories.get(session_id, [])
         
-        # Get chat client (reused across requests, kept active)
-        client = await get_chat_client()
-        
-        # Chat with Gemini (max_iterations comes from client instance, which reads from .env)
-        # Passing None uses the client's max_iterations from settings
-        response_text = await client.chat_with_gemini(
-            prompt=chat_request.message,
-            conversation_history=conversation_history,
-            max_iterations=None  # Uses self.max_iterations from settings/.env
-        )
-        
-        # Update conversation history
-        conversation_history.append({
-            "role": "user",
-            "parts": [{"text": chat_request.message}]
-        })
-        conversation_history.append({
-            "role": "model",
-            "parts": [{"text": response_text}]
-        })
+        # First message and user sent greeting or empty -> return fixed greeting so it's always the same
+        model_used: Optional[str] = None
+        if not conversation_history and _is_greeting_or_empty(chat_request.message):
+            response_text = GREETING_MESSAGE
+        turn_contents = None
+        # Bypass disabled: list states now goes through Gemini so it calls get_states tool
+        # if _is_list_states_request(chat_request.message):
+        #     client = await get_chat_client()
+        #     try:
+        #         result = await client.call_mcp_tool("get_states", {"limit": 100})
+        #         response_text = _format_list_tool_result("get_states", result)
+        #     except Exception as e:
+        #         logger.warning(f"Direct get_states failed, falling back to Gemini: {e}")
+        #         response_text, turn_contents = await client.chat_with_gemini(
+        #             prompt=chat_request.message,
+        #             conversation_history=conversation_history,
+        #             max_iterations=None,
+        #             return_turn_contents=True,
+        #         )
+        #         model_used = client.model_name or settings.GEMINI_MODEL_NAME
+        if _is_list_companies_request(chat_request.message):
+            client = await get_chat_client()
+            try:
+                result = await client.call_mcp_tool("get_companies", {"limit": 100})
+                response_text = _format_list_tool_result("get_companies", result)
+            except Exception as e:
+                logger.warning(f"Direct get_companies failed, falling back to Gemini: {e}")
+                response_text, turn_contents = await client.chat_with_gemini(
+                    prompt=chat_request.message,
+                    conversation_history=conversation_history,
+                    max_iterations=None,
+                    return_turn_contents=True,
+                )
+                model_used = client.model_name or settings.GEMINI_MODEL_NAME
+        else:
+            client = await get_chat_client()
+            response_text, turn_contents = await client.chat_with_gemini(
+                prompt=chat_request.message,
+                conversation_history=conversation_history,
+                max_iterations=None,
+                return_turn_contents=True,
+            )
+            model_used = client.model_name or settings.GEMINI_MODEL_NAME
+
+        # Update conversation history (include tool turns like Gemini CLI for correct follow-up context)
+        conversation_history.append({"role": "user", "parts": [{"text": chat_request.message}]})
+        if turn_contents:
+            conversation_history.extend(turn_contents)
+        else:
+            conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
         conversation_histories[session_id] = conversation_history
         
         return ChatResponse(
             response=response_text,
             session_id=session_id,
-            model_used=client.model_name or settings.GEMINI_MODEL_NAME
+            model_used=model_used
         )
             
     except HTTPException:
@@ -219,26 +315,44 @@ async def chat_stream(
             session_id = chat_request.session_id or f"session_{os.urandom(8).hex()}"
             conversation_history = conversation_histories.get(session_id, [])
             
-            # Get chat client (reused across requests, kept active)
-            client = await get_chat_client()
-            
-            # For now, send complete response (streaming can be enhanced later)
-            # Using max_iterations from config
-            response_text = await client.chat_with_gemini(
-                prompt=chat_request.message,
-                conversation_history=conversation_history,
-                max_iterations=settings.GEMINI_MAX_ITERATIONS
-            )
-            
-            # Update conversation history
-            conversation_history.append({
-                "role": "user",
-                "parts": [{"text": chat_request.message}]
-            })
-            conversation_history.append({
-                "role": "model",
-                "parts": [{"text": response_text}]
-            })
+            # First message and greeting/empty -> fixed greeting
+            if not conversation_history and _is_greeting_or_empty(chat_request.message):
+                response_text = GREETING_MESSAGE
+            turn_contents = None
+            # Bypass disabled: list states now goes through Gemini so it calls get_states tool
+            # if _is_list_states_request(chat_request.message):
+            #     client = await get_chat_client()
+            #     try:
+            #         result = await client.call_mcp_tool("get_states", {"limit": 100})
+            #         response_text = _format_list_tool_result("get_states", result)
+            #     except Exception:
+            #         response_text, turn_contents = await client.chat_with_gemini(...)
+            if _is_list_companies_request(chat_request.message):
+                client = await get_chat_client()
+                try:
+                    result = await client.call_mcp_tool("get_companies", {"limit": 100})
+                    response_text = _format_list_tool_result("get_companies", result)
+                except Exception:
+                    response_text, turn_contents = await client.chat_with_gemini(
+                        prompt=chat_request.message,
+                        conversation_history=conversation_history,
+                        max_iterations=settings.GEMINI_MAX_ITERATIONS,
+                        return_turn_contents=True,
+                    )
+            else:
+                client = await get_chat_client()
+                response_text, turn_contents = await client.chat_with_gemini(
+                    prompt=chat_request.message,
+                    conversation_history=conversation_history,
+                    max_iterations=settings.GEMINI_MAX_ITERATIONS,
+                    return_turn_contents=True,
+                )
+
+            conversation_history.append({"role": "user", "parts": [{"text": chat_request.message}]})
+            if turn_contents:
+                conversation_history.extend(turn_contents)
+            else:
+                conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
             conversation_histories[session_id] = conversation_history
             
             # Send response as SSE event

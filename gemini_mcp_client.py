@@ -38,13 +38,38 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Try to import Google Generative AI
+# Try to import Google Gen AI (google-genai package)
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     GEMINI_AVAILABLE = True
 except ImportError:
+    genai = None  # type: ignore
+    types = None  # type: ignore
     GEMINI_AVAILABLE = False
-    logger.warning("google-generativeai not available. Install with: pip install google-generativeai")
+    logger.warning("google-genai not available. Install with: pip install google-genai")
+
+
+def _safe_response_text(response: Any) -> str:
+    """
+    Safely extract text from a generate_content response (google.genai SDK).
+    Uses response.text when available; otherwise walks candidates/parts.
+    """
+    try:
+        if hasattr(response, "text") and response.text is not None:
+            return (response.text or "").strip()
+        if hasattr(response, "candidates") and response.candidates:
+            parts_text = []
+            for candidate in response.candidates:
+                if getattr(candidate, "content", None) and getattr(candidate.content, "parts", None):
+                    for part in candidate.content.parts:
+                        if getattr(part, "text", None):
+                            parts_text.append(part.text)
+            return "".join(parts_text).strip() if parts_text else ""
+        return ""
+    except Exception as e:
+        logger.debug(f"Safe response text extraction failed: {e}")
+        return ""
 
 
 class GeminiMCPClient:
@@ -195,31 +220,27 @@ class GeminiMCPClient:
         self.tools_cache: List[Dict[str, Any]] = []
         self.model_name: Optional[str] = None
         
-        # Initialize Gemini - Priority: parameter > settings from .env > environment variable
-        if GEMINI_AVAILABLE:
+        # Initialize Google Gen AI client (google.genai package)
+        self.genai_client: Any = None
+        if GEMINI_AVAILABLE and genai is not None:
             api_key = (
                 gemini_api_key
                 or (settings.GEMINI_API_KEY if settings else None)
                 or os.getenv("GEMINI_API_KEY")
             )
             if api_key:
-                genai.configure(api_key=api_key)
-                self.model = None
-                logger.debug(f"Gemini API configured using {'parameter' if gemini_api_key else 'settings/.env' if settings and settings.GEMINI_API_KEY else 'environment variable'}")
+                self.genai_client = genai.Client(api_key=api_key)
+                logger.debug(f"Gemini client created using {'parameter' if gemini_api_key else 'settings/.env' if settings and settings.GEMINI_API_KEY else 'environment variable'}")
             else:
                 logger.warning(
                     "Gemini API key not provided. "
                     "Set GEMINI_API_KEY in .env file or pass gemini_api_key parameter."
                 )
-                self.model = None
-        else:
-            self.model = None
 
     @staticmethod
     def _normalize_model_name(name: str) -> str:
         """
-        Normalize a model name to the format expected by the google-generativeai SDK.
-        The SDK commonly uses names like 'models/gemini-pro'.
+        Normalize model name for google.genai (e.g. gemini-2.0-flash -> models/gemini-2.0-flash).
         """
         if not name:
             return name
@@ -230,100 +251,101 @@ class GeminiMCPClient:
     def list_available_gemini_models(self) -> List[Dict[str, Any]]:
         """
         List models visible to the current Gemini API key.
-        Returns a simplified list for logging/diagnostics.
         """
-        if not GEMINI_AVAILABLE:
+        if not GEMINI_AVAILABLE or not self.genai_client:
             return []
         models = []
         try:
-            for m in genai.list_models():
-                methods = getattr(m, 'supported_generation_methods', [])
-                if 'generateContent' in methods:
-                    models.append({
-                        'name': m.name,
-                        'display_name': getattr(m, 'display_name', ''),
-                        'description': getattr(m, 'description', '')
-                    })
+            for m in self.genai_client.models.list():
+                models.append({
+                    "name": getattr(m, "name", str(m)),
+                    "display_name": getattr(m, "display_name", ""),
+                    "description": getattr(m, "description", ""),
+                })
         except Exception as e:
             logger.warning(f"Failed to list Gemini models: {e}")
         return models
+    """
+    # System instruction for InsureAI (used in generate_content config)
+    SYSTEM_INSTRUCTION = (
+        "You are InsureAI, an insurance rating assistant. Use the provided MCP tools for every data query; never answer from memory or general knowledge. "
+        "For questions about companies, states, LOBs, products, contexts, rating tables, algorithms, manuals, plans, or system health, call the matching tool first and respond only from its result. "
+        "Use get_companies for companies, get_states for states, get_lobs for LOBs, get_products for products, get_contexts for contexts, get_ratingtables for rating tables, get_algorithms for algorithms, get_ratingmanuals for manuals, get_ratingplans for plans, health_check for status, and evaluate_expression for math or premium formulas. "
+        "Base your reply only on what the tool returned; if it returns nothing or an error, say so. "
+        "Answer only about insurance rating, premium calculation, and test case validation; for other topics, decline politely. "
+        "Validate test cases from user or underwriter inputs using algorithm steps from the MCP server. "
+        "Ask inputs hierarchically, fetch required values via tools, then calculate premium from those inputs and fetched values. "
+        "Analyze data structures, formulas, and metadata for correctness. "
+        "The system has COMPANY, LOB, PRODUCT, STATE, CONTEXTS, rating_tables, algorithms, and rate_configurations; fetch product ratings and information using the tools. "
+        "Explain your reasoning before calling a tool. "
+        "Calculate premiums by following algorithm steps; ask for missing inputs in a structured way; guide users on how you calculated premium. "
+        "Answer only questions relevant to your goals and the available tools."
+    )
+    """
+    SYSTEM_INSTRUCTION = ("""
+            You are a helpful assistant connected to an MCP server and You are an expert in validating insurance rating algorithms.
+            ## Your Name
+            Your name is InsureAI.
+            ## Your Task
+            Validate the test cases based on user/underwriter inputs and use the algorithm steps fetched from MCP server for insurance rating workbench.
+            Your goal is to ask the inputs from user for a given test case in a hierarchical way, and fetch the required values from MCP server using the available tools, and then calculate
+            premium using those inputs and fetched values.
+            Analyze data structures, formulas, calculations, and AI metadata for correctness and consistency.
 
-    def _ensure_model(self):
-        """
-        Initialize the Gemini model using the requested model name.
-        """
+            ## Required workflow (follow this order strictly)
+            For premium calculation or rating validation, you MUST follow this hierarchy. Do not skip steps or call rating plans or algorithms before you have the scope. 
+            1. **Get scope first**: Obtain company, LOB, state, and product. When the user asks to list states, show states, or which states are available, you MUST call get_states (do not answer from memory). When you need state_id or state options, call get_states. Similarly use get_companies, get_lobs, get_products to list or resolve options. If the user has not provided scope, you may ask—but if they ask "what states?" or "list states", call get_states immediately. When the user gives state name as "ALL" (in any case), always search for that record in the system: call get_states with state_name="ALL" to get the state_id and use it in rating plans, algorithms, and calculations—do not assume or skip this lookup. Once you have resolved scope, memorize or store the four scope IDs: company_id, lob_id, state_id, product_id.
+            2. **When a rating plan or any other attribute is defined for state "ALL" in the system, it means that rating plan or attribute is applicable for any state regardless of user input. When there is no match for the user's state name (e.g. get_states returns no items, or get_ratingplans/get_algorithms return empty for that state_id), by default use the state "ALL": call get_states with state_name="ALL" to get the state_id and use that state_id for rating plans, algorithms, and calculations so the user still gets the corresponding attributes for "ALL".
+            3. **Then get rating plans**: Once you have company_id, lob_id, state_id, and product_id, call get_ratingplans with those filters to find the applicable rating plan(s).
+            4. **Then get algorithms**: Using the same scope (and algorithm_id from the plan if available), call get_algorithms to fetch the calculation logic (formula, calculation_steps, variables).
+            5. **When prompting for user inputs from the calculation steps**: Ask only for inputs that are defined in the algorithm's calculation_steps (fetched from get_algorithms). Do not deviate from or add to those steps—do not ask questions from your own knowledge or invent inputs. Ask for one input at a time, in the order of the calculation steps. Do not ask for all inputs in a single message—prompt for each question or input from the calculation steps one by one, wait for the user's answer, then prompt for the next. Treat the user's answers as the input and intermediate values for the formula. If a step asks for state (code or name), the user's answer is for factor lookup only—never use it to change scope (see "State in calculation steps" below). Fetch any factor values (rates, factors, multipliers) from the corresponding rating_tables: call get_ratingtables with the same scope (company_id, lob_id, state_id, product_id) to get the relevant tables, then use the table data to look up factors that the algorithm expression needs.
+            6. **Execute the calculation**: Pass the algorithm expression and all variables to evaluate_expression: (a) expression = the formula/expression from the algorithm, (b) variables = a dict combining the user's inputs (answers to the calculation-step queries), any intermediate variables from the algorithm, and the factor values fetched from the rating_tables. Then call evaluate_expression with that expression and variables to get the premium result. Guide the user on how you calculated the premium.
+
+            ## Scope IDs: memorize and always use for rating tables, plans, algorithms
+            Memorize or store the scope IDs (company_id, lob_id, state_id, product_id) once you have resolved them in step 1. Always use these same IDs when calling get_ratingtables, get_ratingplans, and get_algorithms—do not substitute names or re-lookup IDs for these scope parameters; use the stored IDs for every search in rating tables, rating plans, and rating algorithms.
+
+            ## User inputs: calculation steps only (do not deviate or hallucinate)
+            For a given algorithm, ask the user only for inputs that appear in that algorithm's calculation_steps. Do not deviate from the steps or ask questions from your own knowledge. Do not hallucinate or invent additional inputs—if the algorithm has N steps that require user input, ask exactly those N; no more, no less, and no different questions. Use only the questions/inputs defined in the algorithm data from get_algorithms.
+
+            ## State in calculation steps (CRITICAL: do not change scope)
+            The scope (company_id, lob_id, state_id, product_id) is fixed in step 1 and must never be updated from user answers to calculation-step questions. When the algorithm's calculation steps ask for a state code or state name (e.g. "What state?", "Enter state code"), the user's reply (e.g. "NY", "CA", "ALL") is for factor lookup only: use it for lookup to find the correct value in the rating table for that state. Do NOT use that state to look up or overwrite state_id in scope. Do NOT call get_states with the user's calculation-step state and then use that state_id for get_ratingplans, get_algorithms, or get_ratingtables. Always use the original state_id from step 1 for those tool calls. Summary: scope state_id = from step 1 only; state from calculation-step user input only for looking up a factor in the Rating tables, never for scope.
+
+            ## Schema Overview
+            The system consists of 8 core collections:
+            1. **COMPANIES** - Insurance company records
+            2. **LOBS** - Lines of Business (EPL)
+            3. **PRODUCTS** - Insurance products (EPL Standard Coverage)
+            4. **STATES** - All states that rating is applicable (except "ALL" which is applicable for any state)
+            5. **CONTEXTS** - contains all Rating questions and validation rules associated with Rating tables and algorithms
+            6. **ratingtables** - Premium rating tables (base rates, factors, multipliers)
+            7. **algorithms** - Premium calculation formulas and workflows
+            8. **ratingplans** - Configuration linking all components.
+            Your goal is to fetch product ratings and information using the available tools.
+            Always explain your reasoning before calling a tool.
+
+            ## Search behavior
+            Ignore case sensitivity for any search. When calling tools with name or text filters (e.g. state_name, company_name, plan_name, algorithm_name, product_name, lob_name), treat searches as case-insensitive: "NY", "ny", "Ny" and "all", "ALL", "All" are equivalent. Pass the user's input as-is; the system performs case-insensitive matching. When the user inputs state name as "ALL" (any case), always look up the state record in the system by calling get_states with state_name="ALL" and use the returned state_id for all downstream tool calls—never assume or skip this search. When there is no match for the user's state name (empty results from get_states or from get_ratingplans/get_algorithms for that state), by default use the state "ALL": look up get_states with state_name="ALL", get its state_id, and use that for rating plans, algorithms, and calculations so the user gets the corresponding attributes for "ALL".
+
+            ## Variable and field name formatting
+            Treat backslash-escaped underscores in variable or field names as equivalent to plain underscores. For example: Distribution\\_System\\_Credit = Distribution_System_Credit. When you see names like "Distribution\\_System\\_Credit" in algorithm steps, rating tables, or user input, use the form with plain underscores (Distribution_System_Credit) when building the variables dict for evaluate_expression and when matching keys from rating_tables or algorithm data, so the expression and variables use consistent names.
+
+            Capabilities:
+            1.  **Calculate premiums for insurance product**: Follow the workflow above: scope -> rating plans -> algorithms -> get user answers for calculation-step queries -> fetch factor values from rating_tables -> call evaluate_expression with the algorithm expression and variables (user inputs + factors from tables).
+            2.  **Ask user for inputs if missing**: Ask for company, LOB, state, and product first; then ask only for the inputs required by the algorithm's calculation steps (from get_algorithms)—one by one (one question per message), not all at once. Do not ask for inputs that are not in the calculation steps; do not deviate or use your own knowledge. Use the user's answers as expression variables.
+            3.  **Fetch factors from rating_tables**: Use get_ratingtables (same scope as the plan/algorithm) to obtain the tables; look up the factor values needed by the algorithm expression and add them to the variables dict for evaluate_expression.
+            4.  **Show reasoning**: Guide users on how you have calculated insurance premium.
+            5.  **DO NOT ANSWER OTHER QUESTIONS**: Only answer the questions which are relevant to your goals, capabilities, and the data and tools available in MCP server.
+            """
+    )   
+    def _ensure_model(self) -> None:
+        """Set model name for generate_content (client already created in __init__)."""
         if not GEMINI_AVAILABLE:
-            logger.warning("google-generativeai not available.")
+            logger.warning("google-genai not available.")
             return
-        if self.model is not None:
-            return  # Already resolved
-        
-        try:
-            normalized_requested = self._normalize_model_name(self.requested_model_name)
-            self.model_name = normalized_requested
-            
-            # System instruction to help Gemini provide better responses
-            """
-            system_instruction = (
-                "You are an expert Ratings API Assistant. Your goal is to help users interact with the Ratings API. "
-                "When users ask to fetch or list entities (like companies, products, etc.), you should provide "
-                "the full details returned by the tools unless they specifically ask for a summary. "
-                "Always include IDs, codes, names, and status (active/inactive) in your responses. "
-                "If many items are returned, you can use a table format for clarity.\n\n"
-                "IMPORTANT: When a user asks to create, update, or delete an entity, you must first verify "
-               "that you have all the required information. Refer to your available tools and their parameters "
-               "to see what details are needed (e.g., company_code, company_name, etc.). If any required "
-               "information is missing, do not call the tool. Instead, politely ask the user to provide the "
-                "specific missing details before proceeding."
-            )
-            """
-            system_instruction = (
-                """
-                You are a helpful assistant connected to an MCP server and You are an expert in interacting with the Ratings API. 
-                ## Your Name
-                Your name is InsureAI.
-                ## Your Task
-                Validate the test cases based on user/underwriter inputs and use the algorithm steps fetched from MCP server for insurance rating workbench.
-                Your goal is to ask the inputs from user for a given test case in a hierarchial way, and fetch the required values from MCP server using the available tools, and then calculate
-                premium using those inputs and fetched values.
-                Analyze data structures, formulas, calculations, and AI metadata for correctness and consistency.
-
-                ## Schema Overview
-                The system consists of 8 core collections:
-                1. **COMPANY** - Insurance company records
-                2. **LOB** - Lines of Business (EPL)
-                3. **PRODUCT** - Insurance products (EPL Standard Coverage)
-                4. **STATE** - All 51 US states + DC
-                5. **CONTEXTS** - Rating questions and validation rules
-                6. **rating_tables** - Premium rating tables (base rates, factors, multipliers)
-                7. **algorithms** - Premium calculation formulas and workflows
-                8. **rate_configurations** - Configuration linking all components.
-                Your goal is to fetch product ratings and information using the available tools.
-                Always explain your reasoning before calling a tool.
-
-                Capabilities:
-                1.  **Calculate premiums for insurance product**: Analyze the data inputs and algorithms, and make sure to follow the steps to calculate insurance premium    
-                2.  **Ask user for inputs if missing**: Ask inputs from user in a structured way to calculate premium
-                3.  **Show reasoning**: Guide users on how you have calculated insurance premium
-                4.  **DO NOT ANSWER OTHER QUESTIONS**: Only answer the questions which are relevant to your goals, capabilities, and the data and tools available in MCP server
-                """)
-
-            
-            # Only pass system_instruction if it's not None (Gemini SDK doesn't accept empty values)
-            if system_instruction:
-                self.model = genai.GenerativeModel(
-                    model_name=normalized_requested,
-                    system_instruction=system_instruction
-                )
-                logger.info(f"Using Gemini model: {normalized_requested} with system instruction")
-            else:
-                self.model = genai.GenerativeModel(
-                    model_name=normalized_requested
-                )
-                logger.info(f"Using Gemini model: {normalized_requested} without system instruction")
-        except Exception as e:
-            logger.error(f"Error initializing Gemini model: {e}")
-            raise RuntimeError(f"Failed to initialize Gemini model '{self.requested_model_name}': {e}")
+        if self.model_name is not None:
+            return
+        self.model_name = self._normalize_model_name(self.requested_model_name)
+        logger.info(f"Using Gemini model: {self.model_name}")
     
     async def _start_stdio_connection(self):
         """Start stdio-based MCP server process."""
@@ -568,64 +590,116 @@ class GeminiMCPClient:
             logger.error(f"Error listing tools: {e}")
             raise
     
+    # Common parameter descriptions so Gemini understands args when MCP omits them
+    _PARAM_DESCRIPTIONS: Dict[str, str] = {
+        "skip": "Number of records to skip for pagination (default 0).",
+        "limit": "Maximum number of records to return (e.g. 100).",
+        "active": "Filter by active status: true, false, or omit for all.",
+        "company_name": "Filter by company name (partial match).",
+        "company_id": "Filter by company ID (integer).",
+        "lob_id": "Filter by Line of Business ID.",
+        "lob_name": "Filter by LOB name (partial match).",
+        "product_id": "Filter by product ID.",
+        "product_name": "Filter by product name (partial match).",
+        "state_id": "Filter by state ID.",
+        "state_name": "Search for a state by name or code (partial match). Use when user says State = ALL or asks for a specific state (e.g. state_name='ALL', state_name='NY').",
+        "context_id": "Filter by context ID.",
+        "context_name": "Filter by context name (partial match).",
+        "ratingtable_id": "Rating table ID (integer).",
+        "table_name": "Filter by rating table name (partial match).",
+        "table_type": "Filter by table type (e.g. BASE, LOAD, FACTOR).",
+        "algorithm_id": "Algorithm ID (integer).",
+        "algorithm_name": "Filter by algorithm name (partial match).",
+        "ratingmanual_id": "Rating manual ID (integer).",
+        "manual_name": "Filter by manual name (partial match).",
+        "ratingplan_id": "Rating plan ID (integer).",
+        "plan_name": "Filter by plan name (partial match).",
+        "effective_date": "Filter by effective date (YYYY-MM-DD).",
+        "expression": "Mathematical expression to evaluate (e.g. 'base_rate * factor').",
+        "variables": "Dict of variable names to values used in the expression.",
+    }
+
+    def _tool_description_for_gemini(self, tool_name: str, raw_description: str) -> str:
+        """Build a short, clear tool description so Gemini knows when and how to use it."""
+        if not raw_description or not raw_description.strip():
+            # Fallback one-liners for known tools
+            fallbacks = {
+                "get_companies": "List insurance companies. Use first (step 1) to get company_id for premium scope. Also when user asks to list companies or find company by name. Returns items (id, company_code, company_name, active) and count.",
+                "get_lobs": "List lines of business (LOB). Use first (step 1) to get lob_id for premium scope. Also when user asks for LOBs or to filter by company. Returns items and count.",
+                "get_products": "List insurance products. Use first (step 1) to get product_id for premium scope. Also when user asks for products or to filter by company/LOB. Returns items and count.",
+                "get_states": "List or find states. Call this whenever the user asks to list states, show states, what states are available, or when you need state_id or state options (e.g. step 1 of premium). For State = ALL use state_name='ALL'; for NY use state_name='NY'. Returns (id, state_code, state_name, active). Always use this tool for state data—never answer about states without calling it.",
+                "get_contexts": "List rating contexts (questions/rules). Use when user asks for contexts or validation rules. Returns items and count.",
+                "get_ratingtables": "List rating tables (rates, factors). Use when user asks for rating tables or to filter by company/LOB/state/product. Returns items and count.",
+                "get_ratingtable": "Get one rating table by ID. Use when you have a ratingtable_id and need full details.",
+                "get_algorithms": "List rating algorithms (calculation logic). Call only AFTER you have company_id, lob_id, state_id, product_id (from step 1 and 2). Use to get algorithm steps for premium calculation. Returns items and count.",
+                "get_algorithm": "Get one algorithm by ID. Use when you have an algorithm_id and need formula or logic.",
+                "get_ratingmanuals": "List rating manuals. Use when user asks for manuals or rating data by company/LOB/state/product. Returns items and count.",
+                "get_ratingmanual": "Get one rating manual by ID.",
+                "get_ratingplans": "List rating plans. Call only AFTER you have company_id, lob_id, state_id, product_id (from get_companies, get_lobs, get_states, get_products). Use to find plans for that scope. Returns items and count.",
+                "get_ratingplan": "Get one rating plan by ID.",
+                "health_check": "Check if the API and database are up. Use when user asks about system health or status. Returns status and database connection.",
+                "evaluate_expression": "Evaluate a math expression with variables (e.g. for premium). Use last (step 4) after you have the algorithm and variable values. Pass expression (string) and variables (dict).",
+            }
+            return fallbacks.get(tool_name, f"Call MCP tool: {tool_name}.")
+        # Use first paragraph or first ~400 chars; strip extra newlines
+        first = raw_description.strip().split("\n\n")[0]
+        first = first.replace("\n", " ").strip()
+        if len(first) > 380:
+            first = first[:377].rsplit(" ", 1)[0] + "..."
+        return first
+
     def _convert_mcp_tool_to_gemini_function(self, mcp_tool: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert an MCP tool definition to Gemini function calling format.
-        
-        Args:
-            mcp_tool: MCP tool definition
-            
-        Returns:
-            Gemini function definition
+        Enriches descriptions so Gemini can choose and use tools correctly.
         """
         tool_name = mcp_tool.get("name", "")
-        tool_description = mcp_tool.get("description", "")
-        
+        raw_description = mcp_tool.get("description", "")
+        tool_description = self._tool_description_for_gemini(tool_name, raw_description)
+
         # Extract input schema from MCP tool
         input_schema = mcp_tool.get("inputSchema", {})
         properties = input_schema.get("properties", {})
         required = input_schema.get("required", [])
-        
-        # Convert properties to Gemini format
+
+        # Convert properties to Gemini format; fill missing param descriptions
         gemini_properties = {}
         for prop_name, prop_def in properties.items():
             prop_type = prop_def.get("type", "string")
-            prop_desc = prop_def.get("description", "")
-            
-            # Map MCP types to Gemini types
+            prop_desc = (prop_def.get("description") or "").strip()
+            if not prop_desc:
+                prop_desc = self._PARAM_DESCRIPTIONS.get(
+                    prop_name,
+                    prop_name.replace("_", " ").title() + ".",
+                )
+
             gemini_type = prop_type
             if prop_type == "integer":
                 gemini_type = "number"
-            
+
             gemini_properties[prop_name] = {
                 "type": gemini_type,
-                "description": prop_desc
+                "description": prop_desc,
             }
-            
-            # Handle enum values
             if "enum" in prop_def:
                 gemini_properties[prop_name]["enum"] = prop_def["enum"]
-        
+
         return {
             "name": tool_name,
             "description": tool_description,
             "parameters": {
                 "type": "object",
                 "properties": gemini_properties,
-                "required": required
-            }
+                "required": required,
+            },
         }
     
     def get_gemini_functions(self) -> List[Dict[str, Any]]:
         """
-        Get all MCP tools converted to Gemini function calling format.
-        
-        Returns:
-            List of Gemini function definitions
+        Get all MCP tools converted to Gemini function calling format (dict).
         """
         if not self.tools_cache:
             raise RuntimeError("Tools not loaded. Call list_tools() first.")
-        
         functions = []
         for tool in self.tools_cache:
             try:
@@ -633,8 +707,23 @@ class GeminiMCPClient:
                 functions.append(gemini_func)
             except Exception as e:
                 logger.warning(f"Failed to convert tool {tool.get('name')} to Gemini format: {e}")
-        
         return functions
+
+    def _build_genai_tool(self) -> Any:
+        """Build google.genai types.Tool from get_gemini_functions() for GenerateContentConfig."""
+        if not GEMINI_AVAILABLE or types is None:
+            return None
+        funcs = self.get_gemini_functions()
+        declarations = []
+        for f in funcs:
+            declarations.append(
+                types.FunctionDeclaration(
+                    name=f["name"],
+                    description=f.get("description", ""),
+                    parameters_json_schema=f.get("parameters", {"type": "object", "properties": {}, "required": []}),
+                )
+            )
+        return types.Tool(function_declarations=declarations) if declarations else None
     
     async def call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -672,133 +761,252 @@ class GeminiMCPClient:
             logger.error(f"Error calling MCP tool {tool_name}: {e}")
             raise
     
+    def _part_to_dict(self, part: Any) -> Dict[str, Any]:
+        """Serialize a Part to a dict for storing in conversation history (like Gemini CLI context)."""
+        if getattr(part, "text", None) is not None and part.text != "":
+            return {"text": part.text}
+        if getattr(part, "function_call", None):
+            fc = part.function_call
+            args = getattr(fc, "args", None)
+            return {"function_call": {"name": getattr(fc, "name", ""), "args": dict(args) if args and hasattr(args, "items") else {}}}
+        if getattr(part, "function_response", None):
+            fr = part.function_response
+            return {"function_response": {"name": getattr(fr, "name", ""), "response": getattr(fr, "response", {})}}
+        return {"text": getattr(part, "text", "") or ""}
+
+    def _content_to_dict(self, content: Any) -> Dict[str, Any]:
+        """Serialize a Content to a dict for conversation history."""
+        parts = getattr(content, "parts", None) or []
+        return {"role": getattr(content, "role", "model"), "parts": [self._part_to_dict(p) for p in parts]}
+
+    def _history_to_contents(self, conversation_history: List[Dict[str, Any]]) -> List[Any]:
+        """Convert conversation_history (role/parts) to google.genai types.Content list. Supports text, function_call, and function_response parts (like Gemini CLI)."""
+        if not GEMINI_AVAILABLE or types is None:
+            return []
+        contents = []
+        for msg in conversation_history:
+            role = (msg.get("role") or "user").lower()
+            parts = msg.get("parts") or []
+            part_objs = []
+            for p in parts:
+                if isinstance(p, dict):
+                    if "text" in p and p.get("text") is not None:
+                        part_objs.append(types.Part.from_text(text=p["text"] or ""))
+                    elif "function_call" in p:
+                        fc = p["function_call"]
+                        try:
+                            fc_obj = types.FunctionCall(name=fc.get("name", ""), args=fc.get("args") or {})
+                            part_objs.append(types.Part(function_call=fc_obj))
+                        except (TypeError, AttributeError):
+                            part_objs.append(types.Part.from_text(text=f"(tool call: {fc.get('name', '')})"))
+                    elif "function_response" in p:
+                        fr = p["function_response"]
+                        part_objs.append(types.Part.from_function_response(name=fr.get("name", ""), response=fr.get("response", {})))
+                elif hasattr(p, "text") and p.text is not None:
+                    part_objs.append(types.Part.from_text(text=p.text))
+                elif getattr(p, "function_call", None):
+                    part_objs.append(p)
+                elif getattr(p, "function_response", None):
+                    part_objs.append(p)
+            if part_objs:
+                contents.append(types.Content(role=role, parts=part_objs))
+        return contents
+
     async def chat_with_gemini(
         self,
         prompt: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
-        max_iterations: Optional[int] = None
-    ) -> str:
+        max_iterations: Optional[int] = None,
+        return_turn_contents: bool = False,
+    ):
         """
-        Chat with Gemini, allowing it to use MCP tools.
-        
-        Args:
-            prompt: User prompt
-            conversation_history: Previous conversation messages
-            max_iterations: Maximum number of function call iterations
-                          (defaults to self.max_iterations from settings/.env)
-            
-        Returns:
-            Gemini's response
+        Chat with Gemini using MCP tools (google.genai client.aio.models.generate_content).
+        If return_turn_contents is True, returns (response_text, turn_contents) so the caller can persist
+        model/tool turns in history (like Gemini CLI) for correct follow-up context.
         """
-        # Use provided max_iterations or fall back to instance value from settings/.env
         if max_iterations is None:
             max_iterations = self.max_iterations
         if not GEMINI_AVAILABLE:
-            raise RuntimeError("google-generativeai not installed. Run: pip install google-generativeai")
-
-        # Ensure we have an accessible model for this API key.
-        if self.model is None:
-            self._ensure_model()
-        if self.model is None:
-            raise RuntimeError("Gemini model not initialized. Provide API key.")
-        
+            raise RuntimeError("google-genai not installed. Run: pip install google-genai")
+        self._ensure_model()
+        if not self.genai_client:
+            raise RuntimeError("Gemini client not initialized. Provide API key.")
+        if self.model_name is None:
+            raise RuntimeError("Gemini model name not set.")
         if not self.initialized:
             await self.initialize()
-        
         if not self.tools_cache:
             await self.list_tools()
-        
-        # Get Gemini functions
-        functions = self.get_gemini_functions()
-        
-        # Convert functions to Gemini format
+
+        tool = self._build_genai_tool()
+        # Generation config aligned with Gemini CLI (chat-base: temperature 0.7, topP 1.0, etc.)
+        config_kw: Dict[str, Any] = {
+            "system_instruction": self.SYSTEM_INSTRUCTION,
+            "temperature": getattr(settings, "GEMINI_TEMPERATURE", 0.7),
+            "top_p": getattr(settings, "GEMINI_TOP_P", 1.0),
+            "top_k": getattr(settings, "GEMINI_TOP_K", 40),
+        }
+        max_tokens = getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", None)
+        if max_tokens is not None and max_tokens > 0:
+            config_kw["max_output_tokens"] = max_tokens
+        if tool is not None:
+            config_kw["tools"] = [tool]
+            logger.info(f"Chat start: {len(self.get_gemini_functions())} function declaration(s)")
+
+        # Build contents: history + new user message
+        contents: List[Any] = self._history_to_contents(conversation_history or [])
+        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
+        initial_len = len(contents)
+
+        def _get_function_call_name_and_args(fc: Any) -> tuple:
+            """Extract (name, args) from a function-call part or FunctionCall object."""
+            name = None
+            args = {}
+            if getattr(fc, "function_call", None):
+                name = getattr(fc.function_call, "name", None)
+                a = getattr(fc.function_call, "args", None)
+                if a is not None:
+                    args = dict(a) if hasattr(a, "items") else {}
+            if name is None:
+                name = getattr(fc, "name", None)
+            if not args and hasattr(fc, "args"):
+                a = fc.args
+                args = dict(a) if a and hasattr(a, "items") else {}
+            return (name, args)
+
+        def _format_tool_result_fallback(tool_name: str, tool_result: Dict[str, Any]) -> str:
+            """Format tool result as readable text when model returns empty (e.g. list companies)."""
+            if isinstance(tool_result, dict) and "error" in tool_result:
+                return f"Tool {tool_name} error: {tool_result.get('error', 'Unknown')}"
+            items = tool_result.get("items") if isinstance(tool_result, dict) else None
+            count = tool_result.get("count") if isinstance(tool_result, dict) else None
+            if items is not None and isinstance(items, list):
+                lines = [f"Found {count or len(items)} item(s):"]
+                for i, row in enumerate(items[:50], 1):
+                    if isinstance(row, dict):
+                        parts = [f"{k}={v}" for k, v in list(row.items())[:6]]
+                        lines.append(f"  {i}. " + ", ".join(parts))
+                    else:
+                        lines.append(f"  {i}. {row}")
+                if items and len(items) > 50:
+                    lines.append(f"  ... and {len(items) - 50} more")
+                return "\n".join(lines)
+            return json.dumps(tool_result, default=str)[:2000]
+
         try:
-            # Use the tools parameter if available
-            tools_config = [{"function_declarations": functions}]
-            
-            # Start chat with tools
-            chat = self.model.start_chat(history=conversation_history or [])
-            
-            # Send initial message
-            response = chat.send_message(prompt, tools=tools_config)
-            
-            # Handle function calls iteratively
+            response = await self.genai_client.aio.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(**config_kw),
+            )
             iteration = 0
+            last_tool_results: List[Dict[str, Any]] = []  # for fallback when model returns empty
+
             while iteration < max_iterations:
-                # Check if response contains function calls
-                function_calls = []
-                
-                if hasattr(response, 'candidates') and response.candidates:
-                    for candidate in response.candidates:
-                        if hasattr(candidate, 'content') and candidate.content:
-                            if hasattr(candidate.content, 'parts'):
-                                for part in candidate.content.parts:
-                                    if hasattr(part, 'function_call') and part.function_call:
-                                        func_call = part.function_call
-                                        function_calls.append({
-                                            "name": func_call.name if hasattr(func_call, 'name') else None,
-                                            "args": dict(func_call.args) if hasattr(func_call, 'args') else {}
-                                        })
-                
+                # Collect function calls from response.function_calls or candidates[0].content.parts
+                function_calls: List[Any] = []
+                if getattr(response, "function_calls", None):
+                    function_calls = list(response.function_calls)
+                if not function_calls and getattr(response, "candidates", None) and response.candidates:
+                    c0 = response.candidates[0]
+                    if getattr(c0, "content", None) and getattr(c0.content, "parts", None):
+                        for part in c0.content.parts:
+                            if getattr(part, "function_call", None):
+                                function_calls.append(part)
+
                 if not function_calls:
-                    # No more function calls, return the response
-                    return response.text if hasattr(response, 'text') else str(response)
-                
-                # Process function calls
-                function_responses = []
-                for func_call in function_calls:
-                    func_name = func_call.get("name")
-                    func_args = func_call.get("args", {})
-                    
-                    if not func_name:
+                    text = _safe_response_text(response)
+                    if text:
+                        if return_turn_contents:
+                            return (text, [{"role": "model", "parts": [{"text": text}]}])
+                        return text
+                    # Model returned no text; if we have last tool results, show them
+                    if last_tool_results:
+                        fallback_lines = []
+                        for tr in last_tool_results:
+                            fallback_lines.append(_format_tool_result_fallback(tr["name"], tr["response"]))
+                        fallback_text = "\n\n".join(fallback_lines)
+                        contents.append(types.Content(role="model", parts=[types.Part.from_text(text=fallback_text)]))
+                        if return_turn_contents:
+                            return (fallback_text, [self._content_to_dict(c) for c in contents[initial_len:]])
+                        return fallback_text
+                    out = text or "(No response from model.)"
+                    if return_turn_contents:
+                        return (out, [{"role": "model", "parts": [{"text": out}]}])
+                    return out
+
+                # Append model content (function calls) to history
+                if response.candidates and response.candidates[0].content:
+                    contents.append(types.Content(role="model", parts=response.candidates[0].content.parts))
+
+                # Call MCP tools and build tool response content
+                tool_parts = []
+                last_tool_results = []
+                for fc in function_calls:
+                    name, args = _get_function_call_name_and_args(fc)
+                    if not name:
                         continue
-                    
-                    logger.info(f"Gemini calling function: {func_name} with args: {func_args}")
-                    
+                    logger.info(f"Gemini calling function: {name} with args: {args}")
                     try:
-                        # Call the MCP tool
-                        tool_result = await self.call_mcp_tool(func_name, func_args)
-                        
-                        function_responses.append({
-                            "name": func_name,
-                            "response": tool_result
-                        })
+                        tool_result = await self.call_mcp_tool(name, args)
                     except Exception as e:
-                        logger.error(f"Error calling tool {func_name}: {e}")
-                        function_responses.append({
-                            "name": func_name,
-                            "response": {"error": str(e)}
-                        })
-                
-                # Send function responses back to Gemini
-                if function_responses:
-                    # Format function response for Gemini
-                    response_parts = []
-                    for func_resp in function_responses:
-                        response_parts.append({
-                            "function_response": {
-                                "name": func_resp["name"],
-                                "response": func_resp["response"]
-                            }
-                        })
-                    
-                    # Continue conversation with function results
-                    response = chat.send_message(response_parts, tools=tools_config)
-                    iteration += 1
-                else:
+                        logger.error(f"Error calling tool {name}: {e}")
+                        tool_result = {"error": str(e)}
+                    last_tool_results.append({"name": name, "response": tool_result})
+                    tool_parts.append(types.Part.from_function_response(name=name, response=tool_result))
+
+                if not tool_parts:
                     break
-            
-            return response.text if hasattr(response, 'text') else str(response)
-            
+                contents.append(types.Content(role="tool", parts=tool_parts))
+                response = await self.genai_client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_kw),
+                )
+                iteration += 1
+
+            text = _safe_response_text(response)
+            if text:
+                contents.append(types.Content(role="model", parts=[types.Part.from_text(text=text)]))
+                if return_turn_contents:
+                    return (text, [self._content_to_dict(c) for c in contents[initial_len:]])
+                return text
+            if last_tool_results:
+                fallback_lines = [_format_tool_result_fallback(tr["name"], tr["response"]) for tr in last_tool_results]
+                fallback_text = "\n\n".join(fallback_lines)
+                contents.append(types.Content(role="model", parts=[types.Part.from_text(text=fallback_text)]))
+                if return_turn_contents:
+                    return (fallback_text, [self._content_to_dict(c) for c in contents[initial_len:]])
+                return fallback_text
+            out = text or "(No response from model.)"
+            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=out)]))
+            if return_turn_contents:
+                return (out, [self._content_to_dict(c) for c in contents[initial_len:]])
+            return out
+
         except Exception as e:
             logger.error(f"Error in chat_with_gemini: {e}")
-            # Fallback: try without tools
             try:
-                chat = self.model.start_chat(history=conversation_history or [])
-                response = chat.send_message(prompt)
-                return response.text if hasattr(response, 'text') else str(response)
+                # Fallback without tools
+                contents_fallback = self._history_to_contents(conversation_history or [])
+                contents_fallback.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
+                response = await self.genai_client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=contents_fallback,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.SYSTEM_INSTRUCTION,
+                        temperature=getattr(settings, "GEMINI_TEMPERATURE", 0.7),
+                        top_p=getattr(settings, "GEMINI_TOP_P", 1.0),
+                        top_k=getattr(settings, "GEMINI_TOP_K", 40),
+                        **({"max_output_tokens": settings.GEMINI_MAX_OUTPUT_TOKENS} if getattr(settings, "GEMINI_MAX_OUTPUT_TOKENS", 0) > 0 else {}),
+                    ),
+                )
+                fallback_text = _safe_response_text(response)
+                if return_turn_contents:
+                    return (fallback_text, [{"role": "model", "parts": [{"text": fallback_text}]}])
+                return fallback_text
             except Exception as fallback_error:
-                raise Exception(f"Both tool-enabled and fallback chat failed: {fallback_error}")
+                raise Exception(f"Both tool-enabled and fallback chat failed: {fallback_error}") from e
     
     async def process_gemini_function_calls(
         self,
@@ -873,6 +1081,32 @@ class GeminiMCPClient:
         await self.close()
 
 
+def _normalize_mcp_config_paths(config: Dict[str, Any], config_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Normalize MCP server paths for local dev. If args reference /app/run_mcp_server.py
+    and that path doesn't exist (e.g. not running in Docker), use project-root path
+    so stdio works like the CLI.
+    """
+    import copy
+    config = copy.deepcopy(config)
+    args = config.get("args", [])
+    if not args:
+        return config
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    local_script = os.path.join(project_root, "run_mcp_server.py")
+    normalized = []
+    for a in args:
+        if isinstance(a, str) and "/app/" in a and "run_mcp_server" in a:
+            if not os.path.isfile(a) and os.path.isfile(local_script):
+                normalized.append(local_script)
+                logger.info(f"MCP config: using local path {local_script} instead of {a}")
+                continue
+        normalized.append(a)
+    if normalized != args:
+        config["args"] = normalized
+    return config
+
+
 def find_mcp_config_file() -> Optional[str]:
     """
     Search for mcp.json file in common locations.
@@ -928,7 +1162,10 @@ def load_mcp_config_from_file(config_path: Optional[str] = None, server_name: st
             return None
         
         logger.info(f"Loaded MCP config for server '{server_name}' from {config_path}")
-        return mcp_servers[server_name]
+        config = mcp_servers[server_name]
+        # Normalize paths for local dev: /app/... often doesn't exist outside Docker
+        config = _normalize_mcp_config_paths(config, config_path)
+        return config
     except FileNotFoundError:
         logger.debug(f"MCP config file not found: {config_path}")
         return None

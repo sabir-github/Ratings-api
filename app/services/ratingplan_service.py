@@ -352,6 +352,15 @@ class RatingPlanService:
         result = await collection.insert_one(ratingplan_dict)
         return existing_manual, algorithm_comparison, new_version, result, expired_id
 
+    @staticmethod
+    def _id_match(value: Any) -> Any:
+        """Match both int and string in DB (documents may have been imported with either type)."""
+        try:
+            v = int(value)
+            return {"$in": [v, str(v)]}
+        except (TypeError, ValueError):
+            return value
+
     def _normalize_plan_document(self, plan: dict) -> dict:
         """Normalize MongoDB document to match schema expectations"""
         # Remove MongoDB _id field if present
@@ -398,16 +407,15 @@ class RatingPlanService:
             if "plan_name" in filter_by:
                 query["plan_name"] = {"$regex": filter_by["plan_name"], "$options": "i"}
             if "company_id" in filter_by:
-                query["company"] = filter_by["company_id"]
+                query["company"] = self._id_match(filter_by["company_id"])
             if "lob_id" in filter_by:
-                query["lob"] = filter_by["lob_id"]
+                query["lob"] = self._id_match(filter_by["lob_id"])
             if "state_id" in filter_by:
-                query["state"] = filter_by["state_id"]
+                query["state"] = self._id_match(filter_by["state_id"])
             if "product_id" in filter_by:
-                query["product"] = filter_by["product_id"]
+                query["product"] = self._id_match(filter_by["product_id"])
             if "algorithm_id" in filter_by:
-                # Filter by algorithm_id - MongoDB will check if the value is in the algorithm array
-                query["algorithm"] = filter_by["algorithm_id"]
+                query["algorithm"] = self._id_match(filter_by["algorithm_id"])
             if "effective_date" in filter_by:
                 query["effective_date"] = filter_by["effective_date"]
         
@@ -601,16 +609,15 @@ class RatingPlanService:
             if "plan_name" in filter_by:
                 query["plan_name"] = {"$regex": filter_by["plan_name"], "$options": "i"}
             if "company_id" in filter_by:
-                query["company"] = filter_by["company_id"]
+                query["company"] = self._id_match(filter_by["company_id"])
             if "lob_id" in filter_by:
-                query["lob"] = filter_by["lob_id"]
+                query["lob"] = self._id_match(filter_by["lob_id"])
             if "state_id" in filter_by:
-                query["state"] = filter_by["state_id"]
+                query["state"] = self._id_match(filter_by["state_id"])
             if "product_id" in filter_by:
-                query["product"] = filter_by["product_id"]
+                query["product"] = self._id_match(filter_by["product_id"])
             if "algorithm_id" in filter_by:
-                # Filter by algorithm_id - MongoDB will check if the value is in the algorithm array
-                query["algorithm"] = filter_by["algorithm_id"]
+                query["algorithm"] = self._id_match(filter_by["algorithm_id"])
             if "effective_date" in filter_by:
                 query["effective_date"] = filter_by["effective_date"]
         

@@ -21,7 +21,21 @@ class RatingPlanCreateSchema(BaseModel):
         if len(v) > 200:
             raise ValueError('Plan name cannot exceed 200 characters')
         return v.strip()
-    
+
+    @validator('company', 'lob', 'state', 'product', 'algorithm', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('company', 'lob', 'state', 'product', 'algorithm')
     def validate_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
