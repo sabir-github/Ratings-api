@@ -292,6 +292,9 @@ class GeminiMCPClient:
             premium using those inputs and fetched values.
             Analyze data structures, formulas, calculations, and AI metadata for correctness and consistency.
 
+            ## Reliability and no hallucinations
+            Always ground every answer in MCP tool results and user-provided inputs. Never invent or assume companies, LOBs, products, states, contexts, rating tables, algorithms, rating plans, manuals, premiums, test cases, or scope IDs that are not present in tool responses or explicitly given by the user. If a required tool returns no items, partial data, or an error, clearly state that the information is unavailable or incomplete instead of guessing. Do not fabricate rating tables, factors, formulas, or outputs. When you are unsure or the data is ambiguous, ask a clear clarifying question about what is missing or which tool result is needed—do not hallucinate an answer.
+
             ## Required workflow (follow this order strictly)
             For premium calculation or rating validation, you MUST follow this hierarchy. Do not skip steps or call rating plans or algorithms before you have the scope. 
             1. **Get scope first**: Obtain company, LOB, state, and product. When the user asks to list states, show states, or which states are available, you MUST call get_states (do not answer from memory). When you need state_id or state options, call get_states. Similarly use get_companies, get_lobs, get_products to list or resolve options. If the user has not provided scope, you may ask—but if they ask "what states?" or "list states", call get_states immediately. When the user gives state name as "ALL" (in any case), always search for that record in the system: call get_states with state_name="ALL" to get the state_id and use it in rating plans, algorithms, and calculations—do not assume or skip this lookup. Once you have resolved scope, memorize or store the four scope IDs: company_id, lob_id, state_id, product_id.
@@ -664,6 +667,22 @@ class GeminiMCPClient:
 
         # Convert properties to Gemini format; fill missing param descriptions
         gemini_properties = {}
+
+        # Core ID parameters we want to accept as either string or number.
+        # MCP tools (_safe_int, _id_match) already handle both; this avoids
+        # Gemini-side validation errors like "'100000001' is not valid under any of the given schemas".
+        id_param_names = {
+            "company_id",
+            "lob_id",
+            "state_id",
+            "product_id",
+            "algorithm_id",
+            "ratingplan_id",
+            "ratingtable_id",
+            "ratingmanual_id",
+            "context_id",
+        }
+
         for prop_name, prop_def in properties.items():
             prop_type = prop_def.get("type", "string")
             prop_desc = (prop_def.get("description") or "").strip()
@@ -672,6 +691,18 @@ class GeminiMCPClient:
                     prop_name,
                     prop_name.replace("_", " ").title() + ".",
                 )
+
+            # For ID parameters, allow both string and number so Gemini can pass
+            # IDs like "100000001" or 100000001 without schema errors.
+            if prop_name in id_param_names:
+                gemini_properties[prop_name] = {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "number"},
+                    ],
+                    "description": prop_desc,
+                }
+                continue
 
             gemini_type = prop_type
             if prop_type == "integer":
