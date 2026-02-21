@@ -132,7 +132,7 @@ class RatingPlanService:
         algorithm_comparison = None
         new_version = None
         result = None
-        expired_id = None
+        expired_ids = []
         
         try:
             if use_transactions:
@@ -149,7 +149,7 @@ class RatingPlanService:
                                 logger.warning("Transactions not supported, falling back to non-transactional mode")
                                 self._transactions_supported = False
                                 use_transactions = False
-                                existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingplan_without_transaction(
+                                existing_manual, algorithm_comparison, new_version, result, expired_ids = await self._create_ratingplan_without_transaction(
                                     collection, ratingplan_data, effective_date, ratingplan_id, now
                                 )
                             else:
@@ -162,13 +162,13 @@ class RatingPlanService:
                     if e.code == 20:  # IllegalOperation
                         logger.warning("Transactions not supported, falling back to non-transactional mode")
                         self._transactions_supported = False
-                        existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingplan_without_transaction(
+                        existing_manual, algorithm_comparison, new_version, result, expired_ids = await self._create_ratingplan_without_transaction(
                             collection, ratingplan_data, effective_date, ratingplan_id, now
                         )
                     else:
                         raise
             else:
-                existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingplan_without_transaction(
+                existing_manual, algorithm_comparison, new_version, result, expired_ids = await self._create_ratingplan_without_transaction(
                     collection, ratingplan_data, effective_date, ratingplan_id, now
                 )
                 
@@ -181,19 +181,20 @@ class RatingPlanService:
                 except Exception as rollback_error:
                     logger.error(f"Failed to rollback ratingplan_id sequence: {rollback_error}")
             
-            # Rollback expiration if record was expired but creation failed
-            if expired_id and not use_transactions:
+            # Rollback expiration if records were expired but creation failed
+            if expired_ids and not use_transactions:
                 try:
-                    await collection.update_one(
-                        {"id": expired_id},
-                        {
-                            "$set": {
-                                "active": True,
-                                "expiration_date": None
+                    for eid in expired_ids:
+                        await collection.update_one(
+                            {"id": eid},
+                            {
+                                "$set": {
+                                    "active": True,
+                                    "expiration_date": None
+                                }
                             }
-                        }
-                    )
-                    logger.info(f"Rolled back expiration of rating plan with id {expired_id}")
+                        )
+                        logger.info(f"Rolled back expiration of rating plan with id {eid}")
                 except Exception as rollback_error:
                     logger.error(f"Failed to rollback expiration: {rollback_error}")
             raise
@@ -227,33 +228,22 @@ class RatingPlanService:
     
     async def _create_ratingplan_in_transaction(self, collection, ratingplan_data, effective_date, ratingplan_id, now, session):
         """Helper method for transactional create operation"""
-        # Check for existing record with same combination (excluding algorithm)
-        existing_manual = await collection.find_one(
-            {
-                "plan_name": ratingplan_data.plan_name,
-                "company": ratingplan_data.company,
-                "lob": ratingplan_data.lob,
-                "product": ratingplan_data.product,
-                "state": ratingplan_data.state,
-                "effective_date": effective_date,
-                "active": True
-            },
-            session=session
-        )
-        
-        if existing_manual:
-            existing_algorithm = existing_manual.get("algorithm")
-            new_algorithm = ratingplan_data.algorithm
-            algorithm_comparison = self._compare_algorithm(existing_algorithm, new_algorithm)
-            
-            if not algorithm_comparison["has_changes"]:
-                await session.abort_transaction()
-                return existing_manual, algorithm_comparison, None, None
-            
+        # Find all active records with same company + lob + product + state
+        base_filter = {
+            "company": ratingplan_data.company,
+            "lob": ratingplan_data.lob,
+            "product": ratingplan_data.product,
+            "state": ratingplan_data.state,
+            "active": True
+        }
+        existing_cursor = collection.find(base_filter, session=session)
+        existing_records = await existing_cursor.to_list(length=None)
+
+        if existing_records:
             today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             today_minus_one = today - timedelta(days=1)
-            await collection.update_one(
-                {"id": existing_manual["id"]},
+            await collection.update_many(
+                base_filter,
                 {
                     "$set": {
                         "expiration_date": today_minus_one,
@@ -263,9 +253,17 @@ class RatingPlanService:
                 },
                 session=session
             )
-            logger.info(f"Expired existing rating plan with id {existing_manual['id']} due to algorithm changes")
-            new_version = existing_manual.get("version", 1.0) + 1.0
+            for rec in existing_records:
+                logger.info(f"Expired existing rating plan with id {rec['id']} (company+lob+product+state match)")
+            # Use highest version from expired records for new version
+            new_version = max(r.get("version", 1.0) for r in existing_records) + 1.0
+            # Use first record for algorithm comparison in response
+            existing_manual = existing_records[0]
+            algorithm_comparison = self._compare_algorithm(
+                existing_manual.get("algorithm"), ratingplan_data.algorithm
+            )
         else:
+            existing_manual = None
             new_version = ratingplan_data.version if ratingplan_data.version is not None else 1.0
             algorithm_comparison = {
                 "has_changes": True,
@@ -292,31 +290,24 @@ class RatingPlanService:
     
     async def _create_ratingplan_without_transaction(self, collection, ratingplan_data, effective_date, ratingplan_id, now):
         """Helper method for non-transactional create operation with error handling"""
-        # Check for existing record with same combination (excluding algorithm)
-        existing_manual = await collection.find_one({
-            "plan_name": ratingplan_data.plan_name,
+        # Find all active records with same company + lob + product + state
+        base_filter = {
             "company": ratingplan_data.company,
             "lob": ratingplan_data.lob,
             "product": ratingplan_data.product,
             "state": ratingplan_data.state,
-            "effective_date": effective_date,
             "active": True
-        })
-        
-        expired_id = None
-        
-        if existing_manual:
-            existing_algorithm = existing_manual.get("algorithm")
-            new_algorithm = ratingplan_data.algorithm
-            algorithm_comparison = self._compare_algorithm(existing_algorithm, new_algorithm)
-            
-            if not algorithm_comparison["has_changes"]:
-                return existing_manual, algorithm_comparison, None, None, None
-            
+        }
+        existing_cursor = collection.find(base_filter)
+        existing_records = await existing_cursor.to_list(length=None)
+
+        expired_ids = []
+
+        if existing_records:
             today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             today_minus_one = today - timedelta(days=1)
-            await collection.update_one(
-                {"id": existing_manual["id"]},
+            await collection.update_many(
+                base_filter,
                 {
                     "$set": {
                         "expiration_date": today_minus_one,
@@ -325,10 +316,16 @@ class RatingPlanService:
                     }
                 }
             )
-            expired_id = existing_manual["id"]
-            logger.info(f"Expired existing rating plan with id {expired_id} due to algorithm changes")
-            new_version = existing_manual.get("version", 1.0) + 1.0
+            expired_ids = [r["id"] for r in existing_records]
+            for eid in expired_ids:
+                logger.info(f"Expired existing rating plan with id {eid} (company+lob+product+state match)")
+            new_version = max(r.get("version", 1.0) for r in existing_records) + 1.0
+            existing_manual = existing_records[0]
+            algorithm_comparison = self._compare_algorithm(
+                existing_manual.get("algorithm"), ratingplan_data.algorithm
+            )
         else:
+            existing_manual = None
             new_version = ratingplan_data.version if ratingplan_data.version is not None else 1.0
             algorithm_comparison = {
                 "has_changes": True,
@@ -350,7 +347,7 @@ class RatingPlanService:
         })
         
         result = await collection.insert_one(ratingplan_dict)
-        return existing_manual, algorithm_comparison, new_version, result, expired_id
+        return existing_manual, algorithm_comparison, new_version, result, expired_ids
 
     @staticmethod
     def _id_match(value: Any) -> Any:
@@ -636,7 +633,7 @@ class RatingPlanService:
             algorithm_comparison = None
             new_version = None
             result = None
-            expired_id = None
+            expired_ids = []
             
             try:
                 await self._validate_associations(
@@ -670,7 +667,7 @@ class RatingPlanService:
                                     logger.warning(f"Transactions not supported for record (ID: {ratingplan_id}), falling back to non-transactional mode")
                                     self._transactions_supported = False
                                     use_transactions = False
-                                    existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingplan_without_transaction(
+                                    existing_manual, algorithm_comparison, new_version, result, expired_ids = await self._create_ratingplan_without_transaction(
                                         collection, ratingplan_data, effective_date, ratingplan_id, now
                                     )
                                 else:
@@ -684,7 +681,7 @@ class RatingPlanService:
                             logger.warning(f"Transactions not supported for record (ID: {ratingplan_id}), falling back to non-transactional mode")
                             self._transactions_supported = False
                             use_transactions = False
-                            existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingplan_without_transaction(
+                            existing_manual, algorithm_comparison, new_version, result, expired_ids = await self._create_ratingplan_without_transaction(
                                 collection, ratingplan_data, effective_date, ratingplan_id, now
                             )
                         else:
@@ -693,7 +690,7 @@ class RatingPlanService:
                         logger.error(f"Error processing rating plan (ID: {ratingplan_id}): {e}")
                         raise
                 else:
-                    existing_manual, algorithm_comparison, new_version, result, expired_id = await self._create_ratingplan_without_transaction(
+                    existing_manual, algorithm_comparison, new_version, result, expired_ids = await self._create_ratingplan_without_transaction(
                         collection, ratingplan_data, effective_date, ratingplan_id, now
                     )
                     
@@ -706,19 +703,20 @@ class RatingPlanService:
                     except Exception as rollback_error:
                         logger.error(f"Failed to rollback ratingplan_id sequence: {rollback_error}")
                 
-                # Rollback expiration if record was expired but creation failed
-                if expired_id and not use_transactions:
+                # Rollback expiration if records were expired but creation failed
+                if expired_ids and not use_transactions:
                     try:
-                        await collection.update_one(
-                            {"id": expired_id},
-                            {
-                                "$set": {
-                                    "active": True,
-                                    "expiration_date": None
+                        for eid in expired_ids:
+                            await collection.update_one(
+                                {"id": eid},
+                                {
+                                    "$set": {
+                                        "active": True,
+                                        "expiration_date": None
+                                    }
                                 }
-                            }
-                        )
-                        logger.info(f"Rolled back expiration of rating plan with id {expired_id}")
+                            )
+                            logger.info(f"Rolled back expiration of rating plan with id {eid}")
                     except Exception as rollback_error:
                         logger.error(f"Failed to rollback expiration: {rollback_error}")
                 results.append({
