@@ -58,6 +58,7 @@ async def get_companies(
     active: Optional[bool] = Query(None, description="Filter by active status"),
     company_name: Optional[str] = Query(None, description="Filter by company name (partial match)"),
     company_code: Optional[str] = Query(None, description="Filter by company code (partial match)"),
+    tax_id: Optional[str] = Query(None, description="Filter by tax ID (partial match)"),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: int = Query(1, ge=-1, le=1, description="Sort order (1 for ascending, -1 for descending)"),
     current_user: UserBase = Depends(get_current_user)
@@ -70,6 +71,8 @@ async def get_companies(
         filter_by["company_name"] = company_name
     if company_code:
         filter_by["company_code"] = company_code
+    if tax_id:
+        filter_by["tax_id"] = tax_id
     
     return await company_service.get_companies(
         skip=skip,
@@ -96,10 +99,8 @@ async def delete_company(
     company_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a company"""
-    success = await company_service.delete_company(company_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Company not found")
+    """Delete a company. Idempotent: returns 204 whether the resource was deleted or already absent."""
+    await company_service.delete_company(company_id)
 
 @router.get("/{company_id}/exists")
 async def check_company_exists(

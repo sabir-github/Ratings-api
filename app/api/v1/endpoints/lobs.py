@@ -95,10 +95,8 @@ async def delete_lob(
     lob_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a lob"""
-    success = await lob_service.delete_lob(lob_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="lob not found")
+    """Delete a lob. Idempotent: returns 204 whether the resource was deleted or already absent."""
+    await lob_service.delete_lob(lob_id)
 
 @router.get("/{lob_id}/exists")
 async def check_lob_exists(

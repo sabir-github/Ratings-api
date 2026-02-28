@@ -230,7 +230,9 @@ async def mcp_get_companies(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     active: Optional[bool] = Query(None),
-    company_name: Optional[str] = Query(None)
+    company_name: Optional[str] = Query(None),
+    company_code: Optional[str] = Query(None),
+    tax_id: Optional[str] = Query(None)
 ):
     """Get companies via MCP API"""
     params = {"skip": skip, "limit": limit}
@@ -238,6 +240,10 @@ async def mcp_get_companies(
         params["active"] = active
     if company_name:
         params["company_name"] = company_name
+    if company_code:
+        params["company_code"] = company_code
+    if tax_id:
+        params["tax_id"] = tax_id
     return await call_api("GET", "/companies", params=params)
 
 @router.get("/api/companies/{company_id}")
@@ -246,6 +252,51 @@ async def mcp_get_company(
 ):
     """Get a company by ID via MCP API"""
     return await call_api("GET", f"/companies/{company_id}")
+
+@router.get("/api/legal-entities")
+async def mcp_get_legal_entities(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    active: Optional[bool] = Query(None),
+    company_id: Optional[int] = Query(None),
+    legal_name: Optional[str] = Query(None),
+    entity_type: Optional[str] = Query(None),
+    jurisdiction: Optional[str] = Query(None),
+):
+    """Get legal entities via MCP API"""
+    params = {"skip": skip, "limit": limit}
+    if active is not None:
+        params["active"] = active
+    if company_id is not None:
+        params["company_id"] = company_id
+    if legal_name:
+        params["legal_name"] = legal_name
+    if entity_type:
+        params["entity_type"] = entity_type
+    if jurisdiction:
+        params["jurisdiction"] = jurisdiction
+    return await call_api("GET", "/legal-entities", params=params)
+
+@router.get("/api/legal-entity-addresses")
+async def mcp_get_legal_entity_addresses(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    legal_entity_id: Optional[int] = Query(None),
+    address_type: Optional[str] = Query(None),
+    city: Optional[str] = Query(None),
+    country_code: Optional[str] = Query(None),
+):
+    """Get legal entity addresses via MCP API"""
+    params = {"skip": skip, "limit": limit}
+    if legal_entity_id is not None:
+        params["legal_entity_id"] = legal_entity_id
+    if address_type:
+        params["address_type"] = address_type
+    if city:
+        params["city"] = city
+    if country_code:
+        params["country_code"] = country_code
+    return await call_api("GET", "/legal-entity-addresses", params=params)
 
 @router.post("/api/companies")
 async def mcp_create_company(
@@ -260,7 +311,8 @@ async def mcp_get_ratingtables(
     limit: int = Query(100, ge=1, le=1000),
     active: Optional[bool] = Query(None),
     table_name: Optional[str] = Query(None),
-    company_id: Optional[int] = Query(None)
+    company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
 ):
     """Get rating tables via MCP API"""
     params = {"skip": skip, "limit": limit}
@@ -270,6 +322,8 @@ async def mcp_get_ratingtables(
         params["table_name"] = table_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     return await call_api("GET", "/ratingtables", params=params)
 
 @router.get("/api/algorithms")
@@ -278,7 +332,8 @@ async def mcp_get_algorithms(
     limit: int = Query(100, ge=1, le=1000),
     active: Optional[bool] = Query(None),
     algorithm_name: Optional[str] = Query(None),
-    company_id: Optional[int] = Query(None)
+    company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
 ):
     """Get algorithms via MCP API"""
     params = {"skip": skip, "limit": limit}
@@ -288,6 +343,8 @@ async def mcp_get_algorithms(
         params["algorithm_name"] = algorithm_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     return await call_api("GET", "/algorithms", params=params)
 
 @router.get("/api/ratingmanuals")
@@ -297,6 +354,7 @@ async def mcp_get_ratingmanuals(
     active: Optional[bool] = Query(None),
     manual_name: Optional[str] = Query(None),
     company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
     effective_date: Optional[str] = Query(None)
 ):
     """Get rating manuals via MCP API"""
@@ -307,6 +365,8 @@ async def mcp_get_ratingmanuals(
         params["manual_name"] = manual_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     if effective_date:
         params["effective_date"] = effective_date
     return await call_api("GET", "/ratingmanuals", params=params)
@@ -318,6 +378,7 @@ async def mcp_get_ratingplans(
     active: Optional[bool] = Query(None),
     plan_name: Optional[str] = Query(None),
     company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
     effective_date: Optional[str] = Query(None)
 ):
     """Get rating plans via MCP API"""
@@ -328,6 +389,8 @@ async def mcp_get_ratingplans(
         params["plan_name"] = plan_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     if effective_date:
         params["effective_date"] = effective_date
     return await call_api("GET", "/ratingplans", params=params)

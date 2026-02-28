@@ -9,6 +9,7 @@ class AlgorithmCreateSchema(BaseModel):
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     version: Optional[float] = Field(None, description="Version (optional, defaults to 1.0)")
     effective_date: Optional[datetime] = Field(None, description="Effective Date (optional, defaults to current datetime if not provided)")
     expiration_date: Optional[datetime] = Field(None, description="Expiration Date (optional)")
@@ -26,7 +27,7 @@ class AlgorithmCreateSchema(BaseModel):
             raise ValueError('Algorithm name cannot exceed 200 characters')
         return v.strip()
 
-    @validator('company', 'lob', 'state', 'product', pre=True)
+    @validator('company', 'lob', 'state', 'product', 'entity', pre=True)
     def coerce_id_to_int(cls, v):
         """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
         if v is None:
@@ -40,12 +41,12 @@ class AlgorithmCreateSchema(BaseModel):
                 pass
         return v
 
-    @validator('company', 'lob', 'state', 'product')
-    def validate_id_fields(cls, v):
+    @validator('company', 'lob', 'state', 'product', 'entity')
+    def validate_required_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
         return v
-
+    
     @validator('required_tables', pre=True)
     def coerce_required_tables(cls, v):
         """Accept list of string or int IDs and coerce to list of int."""
@@ -117,6 +118,7 @@ class AlgorithmResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
+    entity: int
     version: float
     effective_date: datetime
     expiration_date: Optional[datetime]

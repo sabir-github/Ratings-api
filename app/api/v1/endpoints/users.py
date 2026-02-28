@@ -194,7 +194,7 @@ async def delete_user(
     user_id: int,
     current_user: dict = Depends(get_current_user)
 ):
-    """Delete a user"""
+    """Delete a user. Idempotent: returns 204 whether the resource was deleted or already absent."""
     # Only admins can delete users
     if current_user.get("role") != UserRole.ADMIN.value:
         raise HTTPException(
@@ -202,9 +202,7 @@ async def delete_user(
             detail="Not enough permissions to delete users"
         )
     
-    success = await user_service.delete_user(user_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="User not found")
+    await user_service.delete_user(user_id)
 
 @router.get("/{user_id}/exists")
 async def check_user_exists(

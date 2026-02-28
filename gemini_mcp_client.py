@@ -599,6 +599,8 @@ class GeminiMCPClient:
         "limit": "Maximum number of records to return (e.g. 100).",
         "active": "Filter by active status: true, false, or omit for all.",
         "company_name": "Filter by company name (partial match).",
+        "company_code": "Filter by company code (partial match).",
+        "tax_id": "Filter by tax ID (partial match).",
         "company_id": "Filter by company ID (integer).",
         "lob_id": "Filter by Line of Business ID.",
         "lob_name": "Filter by LOB name (partial match).",
@@ -627,18 +629,20 @@ class GeminiMCPClient:
         if not raw_description or not raw_description.strip():
             # Fallback one-liners for known tools
             fallbacks = {
-                "get_companies": "List insurance companies. Use first (step 1) to get company_id for premium scope. Also when user asks to list companies or find company by name. Returns items (id, company_code, company_name, active) and count.",
+                "get_companies": "List insurance companies. Use first (step 1) to get company_id for premium scope. Also when user asks to list companies or find company by name, code, or tax ID. Returns items (id, company_code, company_name, active, hq_address={Street1,Street2,City,State_Province,PostalCode,CountryCode}, tax_id) and count.",
+                "get_legal_entities": "List legal entities (registered entities with contracts/licenses). Use when user asks for legal entities, entities by company, or by name/type/jurisdiction. Returns id, company_id, legal_name, entity_type, identifier (LEI), jurisdiction, registration_number, active.",
+                "get_legal_entity_addresses": "List legal entity addresses (Registered, Physical, Mailing). Use when user asks for addresses of a legal entity. Filter by legal_entity_id, address_type. Returns full_address and components (street1, city, state_province, postal_code, country_code).",
                 "get_lobs": "List lines of business (LOB). Use first (step 1) to get lob_id for premium scope. Also when user asks for LOBs or to filter by company. Returns items and count.",
                 "get_products": "List insurance products. Use first (step 1) to get product_id for premium scope. Also when user asks for products or to filter by company/LOB. Returns items and count.",
                 "get_states": "List or find states. Call this whenever the user asks to list states, show states, what states are available, or when you need state_id or state options (e.g. step 1 of premium). For State = ALL use state_name='ALL'; for NY use state_name='NY'. Returns (id, state_code, state_name, active). Always use this tool for state data—never answer about states without calling it.",
                 "get_contexts": "List rating contexts (questions/rules). Use when user asks for contexts or validation rules. Returns items and count.",
-                "get_ratingtables": "List rating tables (rates, factors). Use when user asks for rating tables or to filter by company/LOB/state/product. Returns items and count.",
+                "get_ratingtables": "List rating tables (rates, factors). Use when user asks for rating tables or to filter by company/LOB/state/product/entity. Returns items and count.",
                 "get_ratingtable": "Get one rating table by ID. Use when you have a ratingtable_id and need full details.",
-                "get_algorithms": "List rating algorithms (calculation logic). Call only AFTER you have company_id, lob_id, state_id, product_id (from step 1 and 2). Use to get algorithm steps for premium calculation. Returns items and count.",
+                "get_algorithms": "List rating algorithms (calculation logic). Call only AFTER you have company_id, lob_id, state_id, product_id, entity_id (from step 1 and 2). Use to get algorithm steps for premium calculation. Returns items and count.",
                 "get_algorithm": "Get one algorithm by ID. Use when you have an algorithm_id and need formula or logic.",
-                "get_ratingmanuals": "List rating manuals. Use when user asks for manuals or rating data by company/LOB/state/product. Returns items and count.",
+                "get_ratingmanuals": "List rating manuals. Use when user asks for manuals or rating data by company/LOB/state/product/entity. Returns items and count.",
                 "get_ratingmanual": "Get one rating manual by ID.",
-                "get_ratingplans": "List rating plans. Call only AFTER you have company_id, lob_id, state_id, product_id (from get_companies, get_lobs, get_states, get_products). Use to find plans for that scope. Returns items and count.",
+                "get_ratingplans": "List rating plans. Call only AFTER you have company_id, lob_id, state_id, product_id, entity_id (from get_companies, get_lobs, get_states, get_products, get_legal_entities). Use to find plans for that scope. Returns items and count.",
                 "get_ratingplan": "Get one rating plan by ID.",
                 "health_check": "Check if the API and database are up. Use when user asks about system health or status. Returns status and database connection.",
                 "evaluate_expression": "Evaluate a math expression with variables (e.g. for premium). Use last (step 4) after you have the algorithm and variable values. Pass expression (string) and variables (dict).",
@@ -673,6 +677,7 @@ class GeminiMCPClient:
         # Gemini-side validation errors like "'100000001' is not valid under any of the given schemas".
         id_param_names = {
             "company_id",
+            "legal_entity_id",
             "lob_id",
             "state_id",
             "product_id",

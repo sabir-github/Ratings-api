@@ -12,6 +12,7 @@ class RatingManualCreateSchema(BaseModel):
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     ratingtable: List[int] = Field(..., description="List of Rating Table IDs (mandatory)")
     priority: int = Field(..., description="Priority (mandatory)")
 
@@ -23,7 +24,7 @@ class RatingManualCreateSchema(BaseModel):
             raise ValueError('Manual name cannot exceed 200 characters')
         return v.strip()
 
-    @validator('company', 'lob', 'state', 'product', pre=True)
+    @validator('company', 'lob', 'state', 'product', 'entity', pre=True)
     def coerce_id_to_int(cls, v):
         """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
         if v is None:
@@ -37,8 +38,8 @@ class RatingManualCreateSchema(BaseModel):
                 pass
         return v
 
-    @validator('company', 'lob', 'state', 'product')
-    def validate_id_fields(cls, v):
+    @validator('company', 'lob', 'state', 'product', 'entity')
+    def validate_required_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
         return v
@@ -140,6 +141,7 @@ class RatingManualResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
+    entity: int
     ratingtable: List[int]
     priority: int
     created_at: datetime

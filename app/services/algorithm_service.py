@@ -9,6 +9,7 @@ from app.services.lob_service import lob_service
 from app.services.state_service import state_service
 from app.services.product_service import product_service
 from app.services.ratingtable_service import ratingtable_service
+from app.services.legal_entity_service import legal_entity_service
 import logging
 import json
 
@@ -50,7 +51,7 @@ class AlgorithmService:
             logger.warning(f"Could not determine transaction support, assuming not supported: {e}")
             return False
 
-    async def _validate_associations(self, company: int, lob: int, state: int, product: int, required_tables: Optional[List[int]] = None):
+    async def _validate_associations(self, company: int, lob: int, state: int, product: int, entity: int, required_tables: Optional[List[int]] = None):
         """Validate that all associated entities exist by id"""
         # Validate company
         if not isinstance(company, int) or company <= 0:
@@ -88,6 +89,13 @@ class AlgorithmService:
                 table_obj = await ratingtable_service.get_ratingtable(table_id)
                 if not table_obj:
                     raise ValueError(f"Rating table with id {table_id} does not exist")
+
+        # Validate entity (required)
+        if not isinstance(entity, int) or entity <= 0:
+            raise ValueError("Entity must be a positive integer ID")
+        entity_obj = await legal_entity_service.get_legal_entity(entity)
+        if not entity_obj:
+            raise ValueError(f"Legal entity with id {entity} does not exist")
 
     def _serialize_datetime(self, obj: Any) -> Any:
         """Recursively convert datetime objects to ISO format strings for JSON serialization"""
@@ -141,7 +149,8 @@ class AlgorithmService:
             algorithm_data.lob,
             algorithm_data.state,
             algorithm_data.product,
-            algorithm_data.required_tables
+            algorithm_data.entity,
+            algorithm_data.required_tables,
         )
         
         now = datetime.now(timezone.utc)
@@ -461,6 +470,10 @@ class AlgorithmService:
             logger.warning(f"Algorithm {algorithm.get('id')} has invalid variables type, converting to dict")
             algorithm["variables"] = {}
         
+        # Handle entity field - required; default 0 for legacy documents without it
+        if "entity" not in algorithm:
+            algorithm["entity"] = 0
+        
         return algorithm
 
     async def get_algorithm(self, algorithm_id: int) -> Optional[AlgorithmResponseSchema]:
@@ -500,6 +513,8 @@ class AlgorithmService:
                 query["state"] = filter_by["state_id"]
             if "product_id" in filter_by:
                 query["product"] = filter_by["product_id"]
+            if "entity_id" in filter_by:
+                query["entity"] = filter_by["entity_id"]
         
         # Build sort
         sort = []
@@ -740,7 +755,8 @@ class AlgorithmService:
                     algorithm_data.lob,
                     algorithm_data.state,
                     algorithm_data.product,
-                    algorithm_data.required_tables
+                    algorithm_data.entity,
+                    algorithm_data.required_tables,
                 )
                 
                 # Set effective_date to start of current day (midnight) if not provided, or normalize provided date to start of day

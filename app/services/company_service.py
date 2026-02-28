@@ -83,6 +83,10 @@ class CompanyService:
                 company_code_filter = filter_by["company_code"]
                 escaped_code = re.escape(company_code_filter)
                 query["company_code"] = {"$regex": f"^{escaped_code}", "$options": "i"}
+            if "tax_id" in filter_by:
+                tax_id_filter = filter_by["tax_id"]
+                escaped_tax_id = re.escape(tax_id_filter)
+                query["tax_id"] = {"$regex": f"^{escaped_tax_id}", "$options": "i"}
         
         # Build sort
         sort = []
@@ -98,7 +102,7 @@ class CompanyService:
     async def update_company(self, company_id: int, update_data: CompanyUpdateSchema) -> Optional[CompanyResponse]:
         collection = await self.get_collection()
         
-        update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
+        update_dict = update_data.dict(exclude_unset=True)
         if not update_dict:
             return None
             
@@ -132,6 +136,10 @@ class CompanyService:
                 company_name_filter = filter_by["company_name"]
                 escaped_name = re.escape(company_name_filter)
                 query["company_name"] = {"$regex": f"^{escaped_name}", "$options": "i"}
+            if "tax_id" in filter_by:
+                tax_id_filter = filter_by["tax_id"]
+                escaped_tax_id = re.escape(tax_id_filter)
+                query["tax_id"] = {"$regex": f"^{escaped_tax_id}", "$options": "i"}
         
         return await collection.count_documents(query)
 

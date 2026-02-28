@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import companies, lobs, products, states, contexts, upload, ratingtables, algorithms, ratingmanuals, ratingplans, mcp, chat, evaluate_expression
+from app.api.v1.endpoints import companies, lobs, products, states, contexts, upload, ratingtables, algorithms, ratingmanuals, ratingplans, legal_entities, legal_entity_addresses, mcp, chat, evaluate_expression
 # from app.api.v1.endpoints import auth, users
 
 api_router = APIRouter()
@@ -8,6 +8,8 @@ api_router = APIRouter()
 # api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 # api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(companies.router, prefix="/companies", tags=["companies"])
+api_router.include_router(legal_entities.router, prefix="/legal-entities", tags=["legal-entities"])
+api_router.include_router(legal_entity_addresses.router, prefix="/legal-entity-addresses", tags=["legal-entity-addresses"])
 api_router.include_router(lobs.router, prefix="/lobs", tags=["line-of-business"])
 api_router.include_router(states.router, prefix="/states", tags=["states"])
 api_router.include_router(products.router, prefix="/products", tags=["products"])
