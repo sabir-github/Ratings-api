@@ -75,6 +75,7 @@ async def get_algorithms(
     lob_id: Optional[int] = Query(None, description="Filter by LOB ID"),
     state_id: Optional[int] = Query(None, description="Filter by State ID"),
     product_id: Optional[int] = Query(None, description="Filter by Product ID"),
+    entity_id: Optional[int] = Query(None, description="Filter by legal entity ID"),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: int = Query(1, ge=-1, le=1, description="Sort order (1 for ascending, -1 for descending)"),
     current_user: UserBase = Depends(get_current_user)
@@ -95,6 +96,8 @@ async def get_algorithms(
         filter_by["state_id"] = state_id
     if product_id is not None:
         filter_by["product_id"] = product_id
+    if entity_id is not None:
+        filter_by["entity_id"] = entity_id
     
     return await algorithm_service.get_algorithms(
         skip=skip,
@@ -189,11 +192,9 @@ async def delete_algorithm(
     algorithm_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete an algorithm"""
+    """Delete an algorithm. Idempotent: returns 204 whether the resource was deleted or already absent."""
     try:
-        success = await algorithm_service.delete_algorithm(algorithm_id)
-        if not success:
-            raise HTTPException(status_code=404, detail="Algorithm not found")
+        await algorithm_service.delete_algorithm(algorithm_id)
     except Exception as e:
         logger.error(f"Error deleting algorithm: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")

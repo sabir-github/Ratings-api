@@ -10,6 +10,7 @@ from app.services.lob_service import lob_service
 from app.services.state_service import state_service
 from app.services.product_service import product_service
 from app.services.algorithm_service import algorithm_service
+from app.services.legal_entity_service import legal_entity_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class RatingPlanService:
             logger.warning(f"Could not determine transaction support, assuming not supported: {e}")
             return False
 
-    async def _validate_associations(self, company: int, lob: int, state: int, product: int, algorithm: int):
+    async def _validate_associations(self, company: int, lob: int, state: int, product: int, algorithm: int, entity: Optional[int] = None):
         """Validate that all associated entities exist by id"""
         if not isinstance(company, int) or company <= 0:
             raise ValueError("Company must be a positive integer ID")
@@ -79,6 +80,14 @@ class RatingPlanService:
         if not algorithm_obj:
             raise ValueError(f"Rating algorithm with id {algorithm} does not exist")
 
+        # Validate entity (required for create)
+        if entity is not None:
+            if not isinstance(entity, int) or entity <= 0:
+                raise ValueError("Entity must be a positive integer ID")
+            entity_obj = await legal_entity_service.get_legal_entity(entity)
+            if not entity_obj:
+                raise ValueError(f"Legal entity with id {entity} does not exist")
+
     def _serialize_datetime(self, obj: Any) -> Any:
         """Recursively convert datetime objects to ISO format strings for JSON serialization"""
         if isinstance(obj, datetime):
@@ -109,7 +118,8 @@ class RatingPlanService:
             ratingplan_data.lob,
             ratingplan_data.state,
             ratingplan_data.product,
-            ratingplan_data.algorithm
+            ratingplan_data.algorithm,
+            ratingplan_data.entity
         )
         
         now = datetime.now(timezone.utc)
@@ -375,6 +385,10 @@ class RatingPlanService:
                 logger.warning(f"Rating plan {plan.get('id')} is missing algorithm field, defaulting to 0")
                 plan["algorithm"] = 0
         
+        # Handle entity field - required; default 0 for legacy documents without it
+        if "entity" not in plan:
+            plan["entity"] = 0
+        
         return plan
 
     async def get_ratingplan(self, ratingplan_id: int) -> Optional[RatingPlanResponseSchema]:
@@ -413,6 +427,8 @@ class RatingPlanService:
                 query["product"] = self._id_match(filter_by["product_id"])
             if "algorithm_id" in filter_by:
                 query["algorithm"] = self._id_match(filter_by["algorithm_id"])
+            if "entity_id" in filter_by:
+                query["entity"] = self._id_match(filter_by["entity_id"])
             if "effective_date" in filter_by:
                 query["effective_date"] = filter_by["effective_date"]
         
@@ -615,6 +631,8 @@ class RatingPlanService:
                 query["product"] = self._id_match(filter_by["product_id"])
             if "algorithm_id" in filter_by:
                 query["algorithm"] = self._id_match(filter_by["algorithm_id"])
+            if "entity_id" in filter_by:
+                query["entity"] = self._id_match(filter_by["entity_id"])
             if "effective_date" in filter_by:
                 query["effective_date"] = filter_by["effective_date"]
         
@@ -641,7 +659,8 @@ class RatingPlanService:
                     ratingplan_data.lob,
                     ratingplan_data.state,
                     ratingplan_data.product,
-                    ratingplan_data.algorithm
+                    ratingplan_data.algorithm,
+                    ratingplan_data.entity
                 )
                 
                 if ratingplan_data.effective_date is not None:

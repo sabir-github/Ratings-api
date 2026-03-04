@@ -28,7 +28,7 @@ class RatingManualBase(BaseModel):
     lob: int = Field(..., description="Lob ID")
     state: int = Field(..., description="State ID")
     product: int = Field(..., description="Product ID")
-    algorithm: int = Field(..., description="Algorithm ID")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     priority: int = Field(..., description="Priority")
 
 class RatingManualCreate(RatingManualBase):

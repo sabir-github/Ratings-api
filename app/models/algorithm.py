@@ -25,6 +25,7 @@ class AlgorithmBase(BaseModel):
     lob: int = Field(..., description="Lob ID")
     state: int = Field(..., description="State ID")
     product: int = Field(..., description="Product ID")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     version: Optional[float] = Field(None, description="Version")
     effective_date: Optional[datetime] = Field(None, description="Effective Date (optional)")
     expiration_date: Optional[datetime] = Field(None, description="Expiration Date (optional)")

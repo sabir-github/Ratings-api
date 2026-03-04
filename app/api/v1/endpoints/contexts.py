@@ -96,10 +96,8 @@ async def delete_context(
     context_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a context"""
-    success = await context_service.delete_context(context_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="context not found")
+    """Delete a context. Idempotent: returns 204 whether the resource was deleted or already absent."""
+    await context_service.delete_context(context_id)
 
 @router.get("/{context_id}/exists")
 async def check_context_exists(

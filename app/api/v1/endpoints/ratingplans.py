@@ -75,7 +75,8 @@ async def get_ratingplans(
     lob_id: Optional[int] = Query(None, description="Filter by LOB ID"),
     state_id: Optional[int] = Query(None, description="Filter by State ID"),
     product_id: Optional[int] = Query(None, description="Filter by Product ID"),
-    algorithm_id: Optional[int] = Query(None, description="Filter by Rating Table ID"),
+    algorithm_id: Optional[int] = Query(None, description="Filter by Algorithm ID"),
+    entity_id: Optional[int] = Query(None, description="Filter by legal entity ID"),
     effective_date: Optional[Union[datetime, str]] = Query(None, description="Filter by effective date (matches records with this exact date). Can be ISO format string or datetime."),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: int = Query(1, ge=-1, le=1, description="Sort order (1 for ascending, -1 for descending)"),
@@ -97,6 +98,8 @@ async def get_ratingplans(
         filter_by["product_id"] = product_id
     if algorithm_id is not None:
         filter_by["algorithm_id"] = algorithm_id
+    if entity_id is not None:
+        filter_by["entity_id"] = entity_id
     if effective_date is not None:
         try:
             # Handle empty string case
@@ -232,11 +235,9 @@ async def delete_ratingplan(
     ratingplan_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a rating plan"""
+    """Delete a rating plan. Idempotent: returns 204 whether the resource was deleted or already absent."""
     try:
-        success = await ratingplan_service.delete_ratingplan(ratingplan_id)
-        if not success:
-            raise HTTPException(status_code=404, detail="Rating manual not found")
+        await ratingplan_service.delete_ratingplan(ratingplan_id)
     except Exception as e:
         logger.error(f"Error deleting rating plan: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")

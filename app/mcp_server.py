@@ -157,20 +157,24 @@ if MCP_AVAILABLE and mcp is not None:
         skip: int = 0,
         limit: int = 100,
         active: Union[bool, str, None] = None,
-        company_name: Optional[str] = None
+        company_name: Optional[str] = None,
+        company_code: Optional[str] = None,
+        tax_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List insurance companies. Use when user asks to list companies, find company by name, or filter by active. Returns items (id, company_code, company_name, active) and count.
+        List insurance companies. Use when user asks to list companies, find company by name, code, or tax ID, or filter by active. Returns items (id, company_code, company_name, active, hq_address, tax_id) and count.
         
         Purpose:
         Retrieves insurance companies from the system. Companies are the top-level entities
         in the ratings hierarchy and represent insurance carriers or organizations that
-        provide insurance products. Use this tool to browse, search, or filter companies by name
-        when setting up rating configurations or managing company data.
+        provide insurance products. Use this tool to browse, search, or filter companies by name,
+        code, or tax ID when setting up rating configurations or managing company data.
         
         Usage Examples:
         - Get all active companies: active=True, limit=100
         - Search for a specific company: company_name="Global Insurance"
+        - Search by company code: company_code="GLOB"
+        - Search by tax ID: tax_id="12-3456789"
         - Get inactive companies: active=False
         - Paginate through companies: skip=100, limit=50
         
@@ -179,6 +183,8 @@ if MCP_AVAILABLE and mcp is not None:
             limit: Maximum number of records to return (default: 100, max: 1000)
             active: Filter by active status (True/False/None). None returns all.
             company_name: Optional partial match filter for company name (case-insensitive)
+            company_code: Optional partial match filter for company code (case-insensitive)
+            tax_id: Optional partial match filter for tax ID (case-insensitive)
             
         Returns:
             Dictionary with:
@@ -187,13 +193,15 @@ if MCP_AVAILABLE and mcp is not None:
               * company_code: Short code (e.g., 'ABC', 'GLOB')
               * company_name: Full legal name
               * active: Boolean indicating if company is active
+              * hq_address: Structured address object (optional) - Street1, Street2, City, State_Province, PostalCode, CountryCode
+              * tax_id: Primary tax identification number for the parent group (optional)
               * created_at: Timestamp of creation
               * updated_at: Timestamp of last update
             - count: Number of items returned
             
         When to Use:
         - User asks to "list companies", "show all companies", "get companies"
-        - Need to find a company by name or code
+        - Need to find a company by name, code, or tax ID
         - Setting up rating configurations that require company selection
         - Verifying company exists before creating related entities (LOBs, products, etc.)
         """
@@ -203,7 +211,85 @@ if MCP_AVAILABLE and mcp is not None:
             params["active"] = active_bool
         if company_name:
             params["company_name"] = company_name
+        if company_code:
+            params["company_code"] = company_code
+        if tax_id:
+            params["tax_id"] = tax_id
         return await call_api("GET", "/companies/", params=params)
+
+    @mcp.tool()
+    async def get_legal_entities(
+        skip: int = 0,
+        limit: int = 100,
+        active: Union[bool, str, None] = None,
+        company_id: Optional[int] = None,
+        legal_name: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        jurisdiction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        List legal entities. Use when user asks for legal entities, entities by company, or to find entities by name/type/jurisdiction. Returns items and count.
+
+        Legal entities are registered entities that enter into legal contracts and hold insurance licenses.
+        Each entity links to a parent Company. Returns: id, company_id, legal_name, entity_type,
+        identifier (LEI), jurisdiction, registration_number, active, created_at, updated_at.
+
+        Args:
+            skip: Pagination offset (default: 0)
+            limit: Max records to return (default: 100, max: 1000)
+            active: Filter by active status (True/False/None)
+            company_id: Filter by parent company ID
+            legal_name: Partial match filter for legal name
+            entity_type: Partial match for entity type (Corporation, Partnership, Trust, etc.)
+            jurisdiction: Partial match for jurisdiction (state/country of registration)
+        """
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if company_id is not None:
+            params["company_id"] = int(company_id)
+        if legal_name:
+            params["legal_name"] = legal_name
+        if entity_type:
+            params["entity_type"] = entity_type
+        if jurisdiction:
+            params["jurisdiction"] = jurisdiction
+        return await call_api("GET", "/legal-entities/", params=params)
+
+    @mcp.tool()
+    async def get_legal_entity_addresses(
+        skip: int = 0,
+        limit: int = 100,
+        legal_entity_id: Optional[int] = None,
+        address_type: Optional[str] = None,
+        city: Optional[str] = None,
+        country_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        List legal entity addresses. Use when user asks for addresses of a legal entity, or addresses by type (Registered, Physical, Mailing). Returns items and count.
+
+        Addresses can be Registered, Physical, or Mailing. Each address has full_address (string) and/or
+        broken-down components (street1, street2, city, state_province, postal_code, country_code).
+
+        Args:
+            skip: Pagination offset (default: 0)
+            limit: Max records to return (default: 100, max: 1000)
+            legal_entity_id: Filter by legal entity ID
+            address_type: Partial match for type (Registered, Physical, Mailing)
+            city: Partial match for city
+            country_code: Partial match for country code
+        """
+        params = {"skip": skip, "limit": limit}
+        if legal_entity_id is not None:
+            params["legal_entity_id"] = int(legal_entity_id)
+        if address_type:
+            params["address_type"] = address_type
+        if city:
+            params["city"] = city
+        if country_code:
+            params["country_code"] = country_code
+        return await call_api("GET", "/legal-entity-addresses/", params=params)
 
     # @mcp.tool()
     # async def get_company(company_id: int) -> Dict[str, Any]:
@@ -229,6 +315,8 @@ if MCP_AVAILABLE and mcp is not None:
     #         - company_code: Short code (e.g., 'ABC', 'GLOB')
     #         - company_name: Full legal name
     #         - active: Boolean indicating if company is active
+    #         - hq_address: Structured address (Street1, Street2, City, State_Province, PostalCode, CountryCode) (optional)
+    #         - tax_id: Primary tax identification number for the parent group (optional)
     #         - created_at: Timestamp of creation
     #         - updated_at: Timestamp of last update
     #         
@@ -653,7 +741,8 @@ if MCP_AVAILABLE and mcp is not None:
         lob_id: Optional[int] = None,
         state_id: Optional[int] = None,
         product_id: Optional[int] = None,
-        context_id: Optional[int] = None
+        context_id: Optional[int] = None,
+        entity_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         List rating tables (rates, factors, multipliers). Use when user asks for rating tables or to filter by company/LOB/state/product. Returns items and count.
@@ -683,6 +772,7 @@ if MCP_AVAILABLE and mcp is not None:
             state_id: Filter by State ID
             product_id: Filter by Product ID
             context_id: Filter by Context ID
+            entity_id: Filter by legal entity ID
             
         Returns:
             Dictionary with items list and count. Each rating table contains:
@@ -716,6 +806,8 @@ if MCP_AVAILABLE and mcp is not None:
                 params["product_id"] = int(product_id)
             if context_id is not None:
                 params["context_id"] = int(context_id)
+            if entity_id is not None:
+                params["entity_id"] = int(entity_id)
             return await call_api("GET", "/ratingtables/", params=params)
         except (TypeError, ValueError) as e:
             logger.warning(f"get_ratingtables argument error: {e}")
@@ -758,7 +850,8 @@ if MCP_AVAILABLE and mcp is not None:
         company_id: Optional[int] = None,
         lob_id: Optional[int] = None,
         state_id: Optional[int] = None,
-        product_id: Optional[int] = None
+        product_id: Optional[int] = None,
+        entity_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         List rating algorithms (premium calculation logic). Use when user asks for algorithms or premium calculation steps. Returns items and count.
@@ -787,6 +880,7 @@ if MCP_AVAILABLE and mcp is not None:
             lob_id: Filter by Line of Business ID
             state_id: Filter by State ID
             product_id: Filter by Product ID
+            entity_id: Filter by legal entity ID
             
         Returns:
             Dictionary with items list and count. Each algorithm contains:
@@ -820,6 +914,9 @@ if MCP_AVAILABLE and mcp is not None:
             pid = _safe_int(product_id)
             if pid is not None:
                 params["product_id"] = pid
+            eid = _safe_int(entity_id)
+            if eid is not None:
+                params["entity_id"] = eid
             return await call_api("GET", "/algorithms/", params=params)
         except (TypeError, ValueError) as e:
             logger.warning(f"get_algorithms argument error: {e}")
@@ -864,6 +961,7 @@ if MCP_AVAILABLE and mcp is not None:
         state_id: Optional[int] = None,
         product_id: Optional[int] = None,
         ratingtable_id: Optional[int] = None,
+        entity_id: Optional[int] = None,
         effective_date: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -895,6 +993,7 @@ if MCP_AVAILABLE and mcp is not None:
             state_id: Filter by State ID
             product_id: Filter by Product ID
             ratingtable_id: Filter by rating table ID (manuals that reference this table)
+            entity_id: Filter by legal entity ID
             effective_date: Optional filter by effective date (YYYY-MM-DD format).
                           Returns manuals effective on or before this date.
             
@@ -929,6 +1028,8 @@ if MCP_AVAILABLE and mcp is not None:
                 params["product_id"] = int(product_id)
             if ratingtable_id is not None:
                 params["ratingtable_id"] = int(ratingtable_id)
+            if entity_id is not None:
+                params["entity_id"] = int(entity_id)
             if effective_date:
                 params["effective_date"] = str(effective_date).strip()
             return await call_api("GET", "/ratingmanuals/", params=params)
@@ -995,6 +1096,7 @@ if MCP_AVAILABLE and mcp is not None:
         state_id: Optional[int] = None,
         product_id: Optional[int] = None,
         algorithm_id: Optional[int] = None,
+        entity_id: Optional[int] = None,
         effective_date: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -1026,6 +1128,7 @@ if MCP_AVAILABLE and mcp is not None:
             state_id: Filter by State ID
             product_id: Filter by Product ID
             algorithm_id: Filter by algorithm ID (plans that use this algorithm)
+            entity_id: Filter by legal entity ID
             effective_date: Optional filter by effective date (YYYY-MM-DD format).
                           Returns plans effective on or before this date.
             
@@ -1070,6 +1173,9 @@ if MCP_AVAILABLE and mcp is not None:
             aid = _safe_int(algorithm_id)
             if aid is not None:
                 params["algorithm_id"] = aid
+            eid = _safe_int(entity_id)
+            if eid is not None:
+                params["entity_id"] = eid
             if effective_date and str(effective_date).strip():
                 params["effective_date"] = str(effective_date).strip()
             logger.info("get_ratingplans request params (resolved): %s", params)
@@ -1279,7 +1385,7 @@ if MCP_AVAILABLE and mcp is not None:
     current_module = sys.modules[__name__]
     # Only list tools that are still registered (create/update/delete are commented out)
     known_tool_names = [
-        'get_companies',
+        'get_companies', 'get_legal_entities', 'get_legal_entity_addresses',
         'get_lobs', 'get_products', 'get_states', 'get_contexts',
         'get_ratingtables',  # 'get_ratingtable' disabled
         'get_algorithms',   # 'get_algorithm' disabled

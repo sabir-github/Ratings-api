@@ -12,6 +12,7 @@ class RatingPlanCreateSchema(BaseModel):
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     algorithm: int = Field(..., description="Algorithm ID (mandatory)")
 
     @validator('plan_name')
@@ -22,7 +23,7 @@ class RatingPlanCreateSchema(BaseModel):
             raise ValueError('Plan name cannot exceed 200 characters')
         return v.strip()
 
-    @validator('company', 'lob', 'state', 'product', 'algorithm', pre=True)
+    @validator('company', 'lob', 'state', 'product', 'algorithm', 'entity', pre=True)
     def coerce_id_to_int(cls, v):
         """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
         if v is None:
@@ -40,6 +41,12 @@ class RatingPlanCreateSchema(BaseModel):
     def validate_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
+        return v
+
+    @validator('entity')
+    def validate_entity(cls, v):
+        if v is not None and (not isinstance(v, int) or v <= 0):
+            raise ValueError('Entity ID must be a positive integer or None')
         return v
     
     @model_validator(mode='after')
@@ -74,6 +81,7 @@ class RatingPlanResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
+    entity: int
     algorithm: int
     created_at: datetime
     updated_at: datetime
