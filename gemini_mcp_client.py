@@ -350,10 +350,10 @@ class GeminiMCPClient:
         **Core Rules**:
         1. Always use MCP tools to get current data - never rely on memory
         2. For premium calculations, follow this order:
-        a. Get scope (company, LOB, state, product) using get_companies, get_lobs, get_states, get_products
-        b. Get rating plan using get_ratingplans with the scope IDs
-        c. Get algorithm using get_algorithms with the scope IDs
-        d. Get rating tables using get_ratingtables with the scope IDs
+        a. Get scope (company, legal entity, LOB, state, product) using get_companies, get_legal_entities, get_lobs, get_states, get_products
+        b. Get rating plan using get_ratingplans with the scope IDs (including entity_id)
+        c. Get algorithm using get_algorithms with the scope IDs (including entity_id)
+        d. Get rating tables using get_ratingtables with the scope IDs (including entity_id)
         e. Ask user for any missing calculation inputs
         f. Call evaluate_expression with the formula and all variables
         3. State "ALL" is a valid state - search for it with get_states(state_name="ALL")
@@ -404,10 +404,15 @@ class GeminiMCPClient:
         ===================================
 
         **Available Tools**:
-        - Data lookup: get_companies, get_lobs, get_products, get_states, get_contexts
+        - Data lookup: get_companies, get_legal_entities, get_legal_entity_addresses, get_lobs, get_products, get_states, get_contexts
         - Rating config: get_ratingtables, get_algorithms, get_ratingplans, get_ratingmanuals
         - Calculation: evaluate_expression
         - Health: health_check
+
+        **Legal Entity Notes**:
+        Legal entities are registered entities (corporations, partnerships, trusts) that hold insurance licenses.
+        Each links to a parent company via company_id. Use get_legal_entities to resolve entity_id when the user
+        provides a legal entity name. If no entity_id is known, omit it from rating queries (it is optional scope).
 
         If a tool returns no data or an error, inform the user clearly.
         """
