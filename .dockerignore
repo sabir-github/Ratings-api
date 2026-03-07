@@ -1,0 +1,63 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+*.egg
+.eggs
+venv/
+.venv/
+env/
+.env
+
+# Environment files - NEVER include in image (use runtime env/secrets)
+.env
+.env.*
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+.tox
+tests/
+
+# Documentation & local files
+*.md
+!README.md
+*.bat
+*.sh
+*.json.local
+cursor-*.json
+mcp.json*
+
+# Build artifacts
+build/
+dist/
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Misc
+.Dockerfile*
+docker-compose*.yml
+docker-compose*.yaml
