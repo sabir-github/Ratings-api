@@ -6,6 +6,7 @@ from app.core.database import get_database, get_next_sequence_value
 from app.schemas.company import CompanyCreateSchema, CompanyUpdateSchema
 from app.models.company import CompanyResponse
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,9 @@ class CompanyService:
     async def create_company(self, company_data: CompanyCreateSchema) -> CompanyResponse:
         collection = await self.get_collection()
         
-        # Auto-generate ID if not provided
-        print("company_data",company_data.id)
-        if company_data.id is None or company_data.id == 0:
-            company_id = await self._generate_company_id()
-        else:
-            company_id = company_data.id
-        print("company_id",company_id)
+        # Auto-generate ID
+        company_id = await self._generate_company_id()
+        
         # Check if company with same ID or code exists
         existing_company = await collection.find_one({
             "$or": [
@@ -43,7 +40,7 @@ class CompanyService:
             raise ValueError("Company with same ID or code already exists")
         
         now = datetime.now(timezone.utc)
-        company_dict = company_data.dict(exclude={'id'})
+        company_dict = company_data.dict()
         company_dict.update({
             "id": company_id,
             "created_at": now,
@@ -75,9 +72,21 @@ class CompanyService:
             if "active" in filter_by:
                 query["active"] = filter_by["active"]
             if "company_name" in filter_by:
-                query["company_name"] = {"$regex": filter_by["company_name"], "$options": "i"}
+                # Use anchored regex (^) for better index utilization
+                # This allows MongoDB to use the company_name index efficiently
+                company_name_filter = filter_by["company_name"]
+                # Escape special regex characters to prevent injection
+                escaped_name = re.escape(company_name_filter)
+                query["company_name"] = {"$regex": f"^{escaped_name}", "$options": "i"}
             if "company_code" in filter_by:
-                query["company_code"] = {"$regex": filter_by["company_code"], "$options": "i"}
+                # Use anchored regex (^) for better index utilization
+                company_code_filter = filter_by["company_code"]
+                escaped_code = re.escape(company_code_filter)
+                query["company_code"] = {"$regex": f"^{escaped_code}", "$options": "i"}
+            if "tax_id" in filter_by:
+                tax_id_filter = filter_by["tax_id"]
+                escaped_tax_id = re.escape(tax_id_filter)
+                query["tax_id"] = {"$regex": f"^{escaped_tax_id}", "$options": "i"}
         
         # Build sort
         sort = []
@@ -93,7 +102,7 @@ class CompanyService:
     async def update_company(self, company_id: int, update_data: CompanyUpdateSchema) -> Optional[CompanyResponse]:
         collection = await self.get_collection()
         
-        update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
+        update_dict = update_data.dict(exclude_unset=True)
         if not update_dict:
             return None
             
@@ -123,7 +132,14 @@ class CompanyService:
             if "active" in filter_by:
                 query["active"] = filter_by["active"]
             if "company_name" in filter_by:
-                query["company_name"] = {"$regex": filter_by["company_name"], "$options": "i"}
+                # Use anchored regex (^) for better index utilization
+                company_name_filter = filter_by["company_name"]
+                escaped_name = re.escape(company_name_filter)
+                query["company_name"] = {"$regex": f"^{escaped_name}", "$options": "i"}
+            if "tax_id" in filter_by:
+                tax_id_filter = filter_by["tax_id"]
+                escaped_tax_id = re.escape(tax_id_filter)
+                query["tax_id"] = {"$regex": f"^{escaped_tax_id}", "$options": "i"}
         
         return await collection.count_documents(query)
 
@@ -133,14 +149,10 @@ class CompanyService:
         
         companies_to_insert = []
         for company_data in companies_data:
-            # Auto-generate ID if not provided
-            #print(company_data.id)
-            if company_data.id is None or company_data.id == 0:
-                company_id = await self._generate_company_id()
-            else:
-                company_id = company_data.id
+            # Auto-generate ID
+            company_id = await self._generate_company_id()
             
-            company_dict = company_data.dict(exclude={'id'})
+            company_dict = company_data.dict()
             company_dict.update({
                 "id": company_id,
                 "created_at": now,

@@ -96,10 +96,8 @@ async def delete_product(
     product_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a product"""
-    success = await product_service.delete_product(product_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="product not found")
+    """Delete a product. Idempotent: returns 204 whether the resource was deleted or already absent."""
+    await product_service.delete_product(product_id)
 
 @router.get("/{product_id}/exists")
 async def check_product_exists(

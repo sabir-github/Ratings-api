@@ -25,7 +25,7 @@ class ProductBase(BaseModel):
     active: bool = Field(..., description="Active status")
 
 class ProductCreate(ProductBase):
-    id: Optional[int] = Field(None, description="Product ID (auto-generated if not provided)")
+    pass
 
 class ProductUpdate(BaseModel):
     product_name: Optional[str] = None

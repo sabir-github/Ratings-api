@@ -24,13 +24,9 @@ class contextservice:
     async def create_context(self, context_data: ContextCreateSchema) -> ContextResponse:
         collection = await self.get_collection()
         
-        # Auto-generate ID if not provided
-        print("context_data",context_data.id)
-        if context_data.id is None or context_data.id == 0:
-            context_id = await self._generate_context_id()
-        else:
-            context_id = context_data.id
-        print("context_id",context_id)
+        # Auto-generate ID
+        context_id = await self._generate_context_id()
+        
         # Check if context with same ID or code exists
         existing_context = await collection.find_one({
             "$or": [
@@ -43,7 +39,7 @@ class contextservice:
             raise ValueError("Context with same ID or code already exists")
         
         now = datetime.now(timezone.utc)
-        context_dict = context_data.dict(exclude={'id'})
+        context_dict = context_data.dict()
         context_dict.update({
             "id": context_id,
             "created_at": now,
@@ -133,14 +129,10 @@ class contextservice:
         
         contexts_to_insert = []
         for context_data in contexts_data:
-            # Auto-generate ID if not provided
-            #print(context_data.id)
-            if context_data.id is None or context_data.id == 0:
-                context_id = await self._generate_context_id()
-            else:
-                context_id = context_data.id
+            # Auto-generate ID
+            context_id = await self._generate_context_id()
             
-            context_dict = context_data.dict(exclude={'id'})
+            context_dict = context_data.dict()
             context_dict.update({
                 "id": context_id,
                 "created_at": now,

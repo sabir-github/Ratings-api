@@ -6,7 +6,8 @@ This document lists all available MCP tools exposed by the Ratings API MCP serve
 
 ### Companies (5 tools)
 1. **get_companies** - Get a list of companies with optional filtering and pagination
-   - Parameters: `skip`, `limit`, `active`, `company_name`
+   - Parameters: `skip`, `limit`, `active`, `company_name`, `company_code`, `tax_id`
+   - Returns: items with `id`, `company_code`, `company_name`, `active`, `hq_address` (object: Street1, Street2, City, State_Province, PostalCode, CountryCode), `tax_id`, `created_at`, `updated_at`
    
 2. **get_company** - Get a specific company by ID
    - Parameters: `company_id` (int)

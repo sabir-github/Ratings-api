@@ -24,13 +24,9 @@ class StateService:
     async def create_state(self, state_data: StateCreateSchema) -> StateResponse:
         collection = await self.get_collection()
         
-        # Auto-generate ID if not provided
-        print("state_data",state_data.id)
-        if state_data.id is None or state_data.id == 0:
-            state_id = await self._generate_state_id()
-        else:
-            state_id = state_data.id
-        print("state_id",state_id)
+        # Auto-generate ID
+        state_id = await self._generate_state_id()
+        
         # Check if state with same ID or code exists
         existing_state = await collection.find_one({
             "$or": [
@@ -43,7 +39,7 @@ class StateService:
             raise ValueError("State with same ID or code already exists")
         
         now = datetime.now(timezone.utc)
-        state_dict = state_data.dict(exclude={'id'})
+        state_dict = state_data.dict()
         state_dict.update({
             "id": state_id,
             "created_at": now,
@@ -133,14 +129,10 @@ class StateService:
         
         states_to_insert = []
         for state_data in states_data:
-            # Auto-generate ID if not provided
-            #print(state_data.id)
-            if state_data.id is None or state_data.id == 0:
-                state_id = await self._generate_state_id()
-            else:
-                state_id = state_data.id
+            # Auto-generate ID
+            state_id = await self._generate_state_id()
             
-            state_dict = state_data.dict(exclude={'id'})
+            state_dict = state_data.dict()
             state_dict.update({
                 "id": state_id,
                 "created_at": now,

@@ -3,13 +3,13 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class AlgorithmCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Algorithm ID (optional, auto-generated if not provided)")
     algorithm_name: str = Field(..., description="Algorithm name (mandatory)")
     algorithm_type: Optional[str] = Field(None, description="Algorithm type (optional)")
     company: int = Field(..., description="Company ID (mandatory)")
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     version: Optional[float] = Field(None, description="Version (optional, defaults to 1.0)")
     effective_date: Optional[datetime] = Field(None, description="Effective Date (optional, defaults to current datetime if not provided)")
     expiration_date: Optional[datetime] = Field(None, description="Expiration Date (optional)")
@@ -26,13 +26,47 @@ class AlgorithmCreateSchema(BaseModel):
         if len(v) > 200:
             raise ValueError('Algorithm name cannot exceed 200 characters')
         return v.strip()
-    
-    @validator('company', 'lob', 'state', 'product')
-    def validate_id_fields(cls, v):
+
+    @validator('company', 'lob', 'state', 'product', 'entity', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
+    @validator('company', 'lob', 'state', 'product', 'entity')
+    def validate_required_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
         return v
     
+    @validator('required_tables', pre=True)
+    def coerce_required_tables(cls, v):
+        """Accept list of string or int IDs and coerce to list of int."""
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, int):
+                out.append(item)
+            elif isinstance(item, str):
+                try:
+                    out.append(int(item.strip()))
+                except ValueError:
+                    out.append(item)
+            else:
+                out.append(item)
+        return out
+
     @validator('required_tables')
     def validate_required_tables(cls, v):
         if v is None:
@@ -84,6 +118,7 @@ class AlgorithmResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
+    entity: int
     version: float
     effective_date: datetime
     expiration_date: Optional[datetime]

@@ -27,14 +27,9 @@ class ProductService(LobService):
         collection = await self.get_collection()
         #collection_lob = await LobService.get_collection(self)
         #print(collection_lob)
-        # Auto-generate ID if not provided
-        #print("product_data",product_data.id)
-        if product_data.id is None or product_data.id == 0:
-            product_id = await self._generate_product_id()
-        else:
-            product_id = product_data.id
+        # Auto-generate ID
+        product_id = await self._generate_product_id()
         
-        #print("product_id",product_id)
         # Check if product with same ID or code exists
         existing_product = await collection.find_one({
             "$or": [
@@ -55,7 +50,7 @@ class ProductService(LobService):
         if not existing_lob:
             raise ValueError("Invalid Lob or Lob does not exist")
         now = datetime.now(timezone.utc)
-        product_dict = product_data.dict(exclude={'id'})
+        product_dict = product_data.dict()
         product_dict.update({
             "id": product_id,
             "created_at": now,
@@ -150,14 +145,10 @@ class ProductService(LobService):
         
         products_to_insert = []
         for product_data in products_data:
-            # Auto-generate ID if not provided
-            print(product_data.id)
-            if product_data.id is None or product_data.id == 0:
-                product_id = await self._generate_product_id()
-            else:
-                product_id = product_data.id
+            # Auto-generate ID
+            product_id = await self._generate_product_id()
             
-            product_dict = product_data.dict(exclude={'id'})
+            product_dict = product_data.dict()
             product_dict.update({
                 "id": product_id,
                 "created_at": now,

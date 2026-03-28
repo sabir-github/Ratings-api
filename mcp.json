@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ratings-api": {
+      "command": "python",
+      "args": [
+        "/app/run_mcp_server.py"
+      ]
+    }
+  }
+}
+

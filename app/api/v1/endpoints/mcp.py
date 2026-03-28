@@ -48,9 +48,40 @@ async def list_mcp_tools():
                         if tool_func and hasattr(tool_func, '__annotations__'):
                             annotations = tool_func.__annotations__.copy()
                             annotations.pop('return', None)  # Remove return type
+                            
+                            properties = {}
+                            from typing import Union, get_origin, get_args
+                            for k, v in annotations.items():
+                                # Map Python types to JSON Schema types
+                                type_str = "string"
+                                origin = get_origin(v)
+                                if v == int:
+                                    type_str = "integer"
+                                elif v == bool:
+                                    type_str = "boolean"
+                                elif v == float:
+                                    type_str = "number"
+                                elif origin == list:
+                                    type_str = "array"
+                                elif origin == dict:
+                                    type_str = "object"
+                                elif origin == Union:
+                                    # Handle Union types like Optional[bool] or Union[bool, str, None]
+                                    args = get_args(v)
+                                    if bool in args:
+                                        type_str = "boolean"
+                                    elif int in args:
+                                        type_str = "integer"
+                                    elif float in args:
+                                        type_str = "number"
+                                    else:
+                                        type_str = "string"
+                                
+                                properties[k] = {"type": type_str}
+                            
                             tool_info["inputSchema"] = {
                                 "type": "object",
-                                "properties": {k: {"type": "string"} for k in annotations.keys()}
+                                "properties": properties
                             }
                         tool_details.append(tool_info)
                 elif hasattr(tools_dict, '__len__') and len(tools_dict) == 0:
@@ -199,7 +230,9 @@ async def mcp_get_companies(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     active: Optional[bool] = Query(None),
-    company_name: Optional[str] = Query(None)
+    company_name: Optional[str] = Query(None),
+    company_code: Optional[str] = Query(None),
+    tax_id: Optional[str] = Query(None)
 ):
     """Get companies via MCP API"""
     params = {"skip": skip, "limit": limit}
@@ -207,6 +240,10 @@ async def mcp_get_companies(
         params["active"] = active
     if company_name:
         params["company_name"] = company_name
+    if company_code:
+        params["company_code"] = company_code
+    if tax_id:
+        params["tax_id"] = tax_id
     return await call_api("GET", "/companies", params=params)
 
 @router.get("/api/companies/{company_id}")
@@ -215,6 +252,51 @@ async def mcp_get_company(
 ):
     """Get a company by ID via MCP API"""
     return await call_api("GET", f"/companies/{company_id}")
+
+@router.get("/api/legal-entities")
+async def mcp_get_legal_entities(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    active: Optional[bool] = Query(None),
+    company_id: Optional[int] = Query(None),
+    legal_name: Optional[str] = Query(None),
+    entity_type: Optional[str] = Query(None),
+    jurisdiction: Optional[str] = Query(None),
+):
+    """Get legal entities via MCP API"""
+    params = {"skip": skip, "limit": limit}
+    if active is not None:
+        params["active"] = active
+    if company_id is not None:
+        params["company_id"] = company_id
+    if legal_name:
+        params["legal_name"] = legal_name
+    if entity_type:
+        params["entity_type"] = entity_type
+    if jurisdiction:
+        params["jurisdiction"] = jurisdiction
+    return await call_api("GET", "/legal-entities", params=params)
+
+@router.get("/api/legal-entity-addresses")
+async def mcp_get_legal_entity_addresses(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    legal_entity_id: Optional[int] = Query(None),
+    address_type: Optional[str] = Query(None),
+    city: Optional[str] = Query(None),
+    country_code: Optional[str] = Query(None),
+):
+    """Get legal entity addresses via MCP API"""
+    params = {"skip": skip, "limit": limit}
+    if legal_entity_id is not None:
+        params["legal_entity_id"] = legal_entity_id
+    if address_type:
+        params["address_type"] = address_type
+    if city:
+        params["city"] = city
+    if country_code:
+        params["country_code"] = country_code
+    return await call_api("GET", "/legal-entity-addresses", params=params)
 
 @router.post("/api/companies")
 async def mcp_create_company(
@@ -229,7 +311,8 @@ async def mcp_get_ratingtables(
     limit: int = Query(100, ge=1, le=1000),
     active: Optional[bool] = Query(None),
     table_name: Optional[str] = Query(None),
-    company_id: Optional[int] = Query(None)
+    company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
 ):
     """Get rating tables via MCP API"""
     params = {"skip": skip, "limit": limit}
@@ -239,6 +322,8 @@ async def mcp_get_ratingtables(
         params["table_name"] = table_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     return await call_api("GET", "/ratingtables", params=params)
 
 @router.get("/api/algorithms")
@@ -247,7 +332,8 @@ async def mcp_get_algorithms(
     limit: int = Query(100, ge=1, le=1000),
     active: Optional[bool] = Query(None),
     algorithm_name: Optional[str] = Query(None),
-    company_id: Optional[int] = Query(None)
+    company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
 ):
     """Get algorithms via MCP API"""
     params = {"skip": skip, "limit": limit}
@@ -257,6 +343,8 @@ async def mcp_get_algorithms(
         params["algorithm_name"] = algorithm_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     return await call_api("GET", "/algorithms", params=params)
 
 @router.get("/api/ratingmanuals")
@@ -266,6 +354,7 @@ async def mcp_get_ratingmanuals(
     active: Optional[bool] = Query(None),
     manual_name: Optional[str] = Query(None),
     company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
     effective_date: Optional[str] = Query(None)
 ):
     """Get rating manuals via MCP API"""
@@ -276,6 +365,8 @@ async def mcp_get_ratingmanuals(
         params["manual_name"] = manual_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     if effective_date:
         params["effective_date"] = effective_date
     return await call_api("GET", "/ratingmanuals", params=params)
@@ -287,6 +378,7 @@ async def mcp_get_ratingplans(
     active: Optional[bool] = Query(None),
     plan_name: Optional[str] = Query(None),
     company_id: Optional[int] = Query(None),
+    entity_id: Optional[int] = Query(None),
     effective_date: Optional[str] = Query(None)
 ):
     """Get rating plans via MCP API"""
@@ -297,6 +389,8 @@ async def mcp_get_ratingplans(
         params["plan_name"] = plan_name
     if company_id is not None:
         params["company_id"] = company_id
+    if entity_id is not None:
+        params["entity_id"] = entity_id
     if effective_date:
         params["effective_date"] = effective_date
     return await call_api("GET", "/ratingplans", params=params)
@@ -362,10 +456,55 @@ async def mcp_protocol(request: Request):
                             tool_dict["description"] = (tool_func.__doc__ or "").strip()
                         if tool_func and hasattr(tool_func, '__annotations__'):
                             annotations = tool_func.__annotations__.copy()
-                            annotations.pop('return', None)
+                            annotations.pop('return', None)  # Remove return type
+                            
+                            properties = {}
+                            required_fields = []
+                            import inspect
+                            from typing import Union, get_origin, get_args
+                            
+                            # Use inspect to get parameters and defaults
+                            sig = inspect.signature(tool_func)
+                            for param_name, param in sig.parameters.items():
+                                if param_name == 'self':
+                                    continue
+                                    
+                                # Determine if field is required (no default value)
+                                if param.default is inspect.Parameter.empty:
+                                    required_fields.append(param_name)
+                                
+                                # Map Python types to JSON Schema types
+                                type_str = "string"
+                                v = param.annotation
+                                origin = get_origin(v)
+                                
+                                if v == int:
+                                    type_str = "integer"
+                                elif v == bool:
+                                    type_str = "boolean"
+                                elif v == float:
+                                    type_str = "number"
+                                elif origin == list:
+                                    type_str = "array"
+                                elif origin == dict:
+                                    type_str = "object"
+                                elif origin == Union:
+                                    args = get_args(v)
+                                    if bool in args:
+                                        type_str = "boolean"
+                                    elif int in args:
+                                        type_str = "integer"
+                                    elif float in args:
+                                        type_str = "number"
+                                    else:
+                                        type_str = "string"
+                                
+                                properties[param_name] = {"type": type_str}
+                            
                             tool_dict["inputSchema"] = {
                                 "type": "object",
-                                "properties": {k: {"type": "string"} for k in annotations.keys()}
+                                "properties": properties,
+                                "required": required_fields
                             }
                         serialized_tools.append(tool_dict)
                 else:
@@ -387,7 +526,7 @@ async def mcp_protocol(request: Request):
                     "get_algorithms", "get_algorithm", "create_algorithm", "update_algorithm", "delete_algorithm",
                     "get_ratingmanuals", "get_ratingmanual", "create_ratingmanual", "update_ratingmanual", "delete_ratingmanual",
                     "get_ratingplans", "get_ratingplan", "create_ratingplan", "update_ratingplan", "delete_ratingplan",
-                    "health_check"
+                    "health_check", "evaluate_expression"
                 ]
                 serialized_tools = [{"name": tool, "description": f"MCP tool: {tool}"} for tool in known_tools]
             
@@ -417,6 +556,8 @@ async def mcp_protocol(request: Request):
                         "id": request_id
                     }
                 )
+            
+            logger.debug(f"Calling tool '{tool_name}' with arguments: {tool_args}")
             
             # Get the tool function and call it
             # Try multiple methods to find and call the tool
@@ -490,7 +631,40 @@ async def mcp_protocol(request: Request):
             # If we found the tool function, call it
             if tool_func and hasattr(tool_func, '__call__'):
                 try:
-                    result = await tool_func(**tool_args)
+                    # Log the function signature for debugging
+                    import inspect
+                    sig = inspect.signature(tool_func)
+                    logger.debug(f"Tool function signature: {sig}")
+                    logger.debug(f"Tool args received: {tool_args}")
+                    
+                    try:
+                        result = await tool_func(**tool_args)
+                    except TypeError as e:
+                        # Some MCP wrappers expect (tool_name, arguments) instead of **kwargs
+                        try:
+                            result = await tool_func(tool_name, tool_args)
+                        except Exception:
+                            raise e
+                    logger.debug(f"Tool {tool_name} returned: {type(result)}")
+                    
+                    # Check if result is an error dict (from old error handling)
+                    if isinstance(result, dict) and "error" in result:
+                        error_msg = result.get("error", "Unknown error")
+                        status_code = result.get("status_code", 500)
+                        logger.warning(f"Tool {tool_name} returned error: {error_msg}")
+                        return JSONResponse(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR if status_code >= 500 else status.HTTP_400_BAD_REQUEST,
+                            content={
+                                "jsonrpc": jsonrpc,
+                                "error": {
+                                    "code": -32000 if status_code >= 500 else -32602,
+                                    "message": "Server error" if status_code >= 500 else "Invalid params",
+                                    "data": error_msg
+                                },
+                                "id": request_id
+                            }
+                        )
+                    
                     return JSONResponse(content={
                         "jsonrpc": jsonrpc,
                         "result": {
@@ -503,8 +677,43 @@ async def mcp_protocol(request: Request):
                         },
                         "id": request_id
                     })
+                except TypeError as e:
+                    # Handle argument mismatch errors
+                    error_msg = f"Invalid arguments for tool {tool_name}: {str(e)}"
+                    logger.error(error_msg)
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={
+                            "jsonrpc": jsonrpc,
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params",
+                                "data": error_msg
+                            },
+                            "id": request_id
+                        }
+                    )
+                except ValueError as e:
+                    # Handle validation errors
+                    error_msg = str(e)
+                    logger.error(f"Validation error in tool {tool_name}: {error_msg}")
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={
+                            "jsonrpc": jsonrpc,
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params",
+                                "data": error_msg
+                            },
+                            "id": request_id
+                        }
+                    )
                 except Exception as e:
-                    logger.error(f"Error calling tool {tool_name}: {e}")
+                    error_msg = str(e)
+                    logger.error(f"Error calling tool {tool_name}: {error_msg}")
                     import traceback
                     logger.error(traceback.format_exc())
                     return JSONResponse(
@@ -514,7 +723,7 @@ async def mcp_protocol(request: Request):
                             "error": {
                                 "code": -32000,
                                 "message": "Server error",
-                                "data": str(e)
+                                "data": error_msg
                             },
                             "id": request_id
                         }

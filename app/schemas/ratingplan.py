@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class RatingPlanCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Plan ID (optional, auto-generated if not provided)")
     plan_name: str = Field(..., description="Plan name (mandatory)")
     active: bool = Field(True, description="Active status")
     version: Optional[float] = Field(None, description="Version (optional, defaults to 1.0, auto-increments if record with same combination exists)")
@@ -13,6 +12,7 @@ class RatingPlanCreateSchema(BaseModel):
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     algorithm: int = Field(..., description="Algorithm ID (mandatory)")
 
     @validator('plan_name')
@@ -22,11 +22,31 @@ class RatingPlanCreateSchema(BaseModel):
         if len(v) > 200:
             raise ValueError('Plan name cannot exceed 200 characters')
         return v.strip()
-    
+
+    @validator('company', 'lob', 'state', 'product', 'algorithm', 'entity', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('company', 'lob', 'state', 'product', 'algorithm')
     def validate_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
+        return v
+
+    @validator('entity')
+    def validate_entity(cls, v):
+        if v is not None and (not isinstance(v, int) or v <= 0):
+            raise ValueError('Entity ID must be a positive integer or None')
         return v
     
     @model_validator(mode='after')
@@ -61,6 +81,7 @@ class RatingPlanResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
+    entity: int
     algorithm: int
     created_at: datetime
     updated_at: datetime

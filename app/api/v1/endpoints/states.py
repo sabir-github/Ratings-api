@@ -96,10 +96,8 @@ async def delete_state(
     state_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a state"""
-    success = await state_service.delete_state(state_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="state not found")
+    """Delete a state. Idempotent: returns 204 whether the resource was deleted or already absent."""
+    await state_service.delete_state(state_id)
 
 @router.get("/{state_id}/exists")
 async def check_state_exists(

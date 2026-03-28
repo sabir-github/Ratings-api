@@ -11,6 +11,7 @@ from app.services.lob_service import lob_service
 from app.services.state_service import state_service
 from app.services.product_service import product_service
 from app.services.context_service import context_service
+from app.services.legal_entity_service import legal_entity_service
 import logging
 import pandas as pd
 import io
@@ -55,7 +56,7 @@ class RatingTableService:
             logger.warning(f"Could not determine transaction support, assuming not supported: {e}")
             return False
 
-    async def _validate_associations(self, company: int, lob: int, state: int, product: int, context: Optional[int] = None):
+    async def _validate_associations(self, company: int, lob: int, state: int, product: int, context: Optional[int] = None, entity: Optional[int] = None):
         """Validate that all associated entities exist by id"""
         # Validate company
         if not isinstance(company, int) or company <= 0:
@@ -92,6 +93,14 @@ class RatingTableService:
             context_obj = await context_service.get_context(context)
             if not context_obj:
                 raise ValueError(f"Context with id {context} does not exist")
+
+        # Validate entity (required)
+        if entity is not None:
+            if not isinstance(entity, int) or entity <= 0:
+                raise ValueError("Entity must be a positive integer ID")
+            entity_obj = await legal_entity_service.get_legal_entity(entity)
+            if not entity_obj:
+                raise ValueError(f"Legal entity with id {entity} does not exist")
 
     def _serialize_datetime(self, obj: Any) -> Any:
         """Recursively convert datetime objects to ISO format strings for JSON serialization"""
@@ -146,7 +155,8 @@ class RatingTableService:
             ratingtable_data.lob,
             ratingtable_data.state,
             ratingtable_data.product,
-            ratingtable_data.context
+            ratingtable_data.context,
+            ratingtable_data.entity
         )
         
         now = datetime.now(timezone.utc)
@@ -157,13 +167,9 @@ class RatingTableService:
         else:
             effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Auto-generate ID if not provided
-        id_was_auto_generated = False
-        if ratingtable_data.id is None or ratingtable_data.id == 0:
-            ratingtable_id = await self._generate_ratingtable_id()
-            id_was_auto_generated = True
-        else:
-            ratingtable_id = ratingtable_data.id
+        # Auto-generate ID
+        id_was_auto_generated = True
+        ratingtable_id = await self._generate_ratingtable_id()
         
         # Check if transactions are supported
         use_transactions = await self._check_transactions_supported()
@@ -338,7 +344,7 @@ class RatingTableService:
             raise ValueError("Rating table with same ID already exists")
         
         # Create new record
-        ratingtable_dict = ratingtable_data.dict(exclude={'id', 'version'})
+        ratingtable_dict = ratingtable_data.dict(exclude={'version'})
         ratingtable_dict["effective_date"] = effective_date
         ratingtable_dict.update({
             "id": ratingtable_id,
@@ -408,7 +414,7 @@ class RatingTableService:
             raise ValueError("Rating table with same ID already exists")
         
         # Create new record
-        ratingtable_dict = ratingtable_data.dict(exclude={'id', 'version'})
+        ratingtable_dict = ratingtable_data.dict(exclude={'version'})
         ratingtable_dict["effective_date"] = effective_date
         ratingtable_dict.update({
             "id": ratingtable_id,
@@ -448,6 +454,10 @@ class RatingTableService:
         elif not isinstance(table["ai_metadata"], dict):
             logger.warning(f"Rating table {table.get('id')} has invalid ai_metadata type, converting to dict")
             table["ai_metadata"] = {}
+        
+        # Handle entity field - required; default 0 for legacy documents without it
+        if "entity" not in table:
+            table["entity"] = 0
         
         return table
 
@@ -490,6 +500,8 @@ class RatingTableService:
                 query["product"] = filter_by["product_id"]
             if "context_id" in filter_by:
                 query["context"] = filter_by["context_id"]
+            if "entity_id" in filter_by:
+                query["entity"] = filter_by["entity_id"]
         
         # Build sort
         sort = []
@@ -530,14 +542,15 @@ class RatingTableService:
                                     await session.abort_transaction()
                                     raise ValueError("expiration_date cannot be less than effective_date")
                             
-                            # Validate context if being updated
-                            if update_data.context is not None:
+                            # Validate context and entity if being updated
+                            if update_data.context is not None or getattr(update_data, 'entity', None) is not None:
                                 await self._validate_associations(
                                     existing_table.get("company"),
                                     existing_table.get("lob"),
                                     existing_table.get("state"),
                                     existing_table.get("product"),
-                                    update_data.context
+                                    update_data.context,
+                                    getattr(update_data, 'entity', None)
                                 )
                             
                             update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
@@ -578,14 +591,15 @@ class RatingTableService:
                     if expiration_date < effective_date:
                         raise ValueError("expiration_date cannot be less than effective_date")
                 
-                # Validate context if being updated
-                if update_data.context is not None:
+                # Validate context and entity if being updated
+                if update_data.context is not None or getattr(update_data, 'entity', None) is not None:
                     await self._validate_associations(
                         existing_table.get("company"),
                         existing_table.get("lob"),
                         existing_table.get("state"),
                         existing_table.get("product"),
-                        update_data.context
+                        update_data.context,
+                        getattr(update_data, 'entity', None)
                     )
                 
                 update_dict = {k: v for k, v in update_data.dict().items() if v is not None}
@@ -665,6 +679,8 @@ class RatingTableService:
                 query["product"] = filter_by["product_id"]
             if "context_id" in filter_by:
                 query["context"] = filter_by["context_id"]
+            if "entity_id" in filter_by:
+                query["entity"] = filter_by["entity_id"]
         
         return await collection.count_documents(query)
 
@@ -698,12 +714,9 @@ class RatingTableService:
                 else:
                     effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # Auto-generate ID if not provided
-                if ratingtable_data.id is None or ratingtable_data.id == 0:
-                    ratingtable_id = await self._generate_ratingtable_id()
-                    id_was_auto_generated = True
-                else:
-                    ratingtable_id = ratingtable_data.id
+                # Auto-generate ID
+                ratingtable_id = await self._generate_ratingtable_id()
+                id_was_auto_generated = True
             
                 existing_table = None
                 data_comparison = None
@@ -1041,6 +1054,7 @@ class RatingTableService:
         lob: int,
         state: int,
         product: int,
+        entity: int,
         context: Optional[int] = None,
         table_type: Optional[str] = None,
         effective_date: Optional[datetime] = None
@@ -1057,6 +1071,7 @@ class RatingTableService:
             lob: LOB ID (mandatory)
             state: State ID (mandatory)
             product: Product ID (mandatory)
+            entity: Legal entity ID (mandatory)
             context: Context ID (optional)
             table_type: Table type (optional)
             effective_date: Effective date (optional, defaults to current date)
@@ -1074,7 +1089,7 @@ class RatingTableService:
         
         try:
             # Validate associations first (outside transaction)
-            await self._validate_associations(company, lob, state, product, context)
+            await self._validate_associations(company, lob, state, product, context, entity)
             
             # Read Excel file
             excel_file = io.BytesIO(file_content)
@@ -1131,6 +1146,7 @@ class RatingTableService:
                         lob=lob,
                         state=state,
                         product=product,
+                        entity=entity,
                         context=context,
                         table_type=detected_table_type,
                         effective_date=effective_date,

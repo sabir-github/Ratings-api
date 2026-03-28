@@ -10,6 +10,7 @@ from app.services.lob_service import lob_service
 from app.services.state_service import state_service
 from app.services.product_service import product_service
 from app.services.ratingtable_service import ratingtable_service
+from app.services.legal_entity_service import legal_entity_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class RatingManualService:
             logger.warning(f"Could not determine transaction support, assuming not supported: {e}")
             return False
 
-    async def _validate_associations(self, company: int, lob: int, state: int, product: int, ratingtables: List[int]):
+    async def _validate_associations(self, company: int, lob: int, state: int, product: int, ratingtables: List[int], entity: Optional[int] = None):
         """Validate that all associated entities exist by id"""
         if not isinstance(company, int) or company <= 0:
             raise ValueError("Company must be a positive integer ID")
@@ -82,6 +83,14 @@ class RatingManualService:
             if not ratingtable_obj:
                 raise ValueError(f"Rating table with id {ratingtable_id} does not exist")
 
+        # Validate entity (required for create)
+        if entity is not None:
+            if not isinstance(entity, int) or entity <= 0:
+                raise ValueError("Entity must be a positive integer ID")
+            entity_obj = await legal_entity_service.get_legal_entity(entity)
+            if not entity_obj:
+                raise ValueError(f"Legal entity with id {entity} does not exist")
+
     def _serialize_datetime(self, obj: Any) -> Any:
         """Recursively convert datetime objects to ISO format strings for JSON serialization"""
         if isinstance(obj, datetime):
@@ -115,7 +124,8 @@ class RatingManualService:
             ratingmanual_data.lob,
             ratingmanual_data.state,
             ratingmanual_data.product,
-            ratingmanual_data.ratingtable
+            ratingmanual_data.ratingtable,
+            ratingmanual_data.entity
         )
         
         now = datetime.now(timezone.utc)
@@ -126,13 +136,9 @@ class RatingManualService:
         else:
             effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Auto-generate ID if not provided
-        id_was_auto_generated = False
-        if ratingmanual_data.id is None or ratingmanual_data.id == 0:
-            ratingmanual_id = await self._generate_ratingmanual_id()
-            id_was_auto_generated = True
-        else:
-            ratingmanual_id = ratingmanual_data.id
+        # Auto-generate ID
+        id_was_auto_generated = True
+        ratingmanual_id = await self._generate_ratingmanual_id()
         
         # Check if transactions are supported
         use_transactions = await self._check_transactions_supported()
@@ -288,7 +294,7 @@ class RatingManualService:
             await session.abort_transaction()
             raise ValueError("Rating manual with same ID already exists")
         
-        ratingmanual_dict = ratingmanual_data.dict(exclude={'id', 'version'})
+        ratingmanual_dict = ratingmanual_data.dict(exclude={'version'})
         ratingmanual_dict["effective_date"] = effective_date
         ratingmanual_dict.update({
             "id": ratingmanual_id,
@@ -350,7 +356,7 @@ class RatingManualService:
         if id_check:
             raise ValueError("Rating manual with same ID already exists")
         
-        ratingmanual_dict = ratingmanual_data.dict(exclude={'id', 'version'})
+        ratingmanual_dict = ratingmanual_data.dict(exclude={'version'})
         ratingmanual_dict["effective_date"] = effective_date
         ratingmanual_dict.update({
             "id": ratingmanual_id,
@@ -391,6 +397,10 @@ class RatingManualService:
                 logger.warning(f"Rating manual {manual.get('id')} has invalid ratingtable type, converting to list")
                 manual["ratingtable"] = []
         
+        # Handle entity field - required; default 0 for legacy documents without it
+        if "entity" not in manual:
+            manual["entity"] = 0
+        
         return manual
 
     async def get_ratingmanual(self, ratingmanual_id: int) -> Optional[RatingManualResponseSchema]:
@@ -427,6 +437,8 @@ class RatingManualService:
                 query["state"] = filter_by["state_id"]
             if "product_id" in filter_by:
                 query["product"] = filter_by["product_id"]
+            if "entity_id" in filter_by:
+                query["entity"] = filter_by["entity_id"]
             if "ratingtable_id" in filter_by:
                 # Filter by ratingtable_id - MongoDB will check if the value is in the ratingtable array
                 query["ratingtable"] = filter_by["ratingtable_id"]
@@ -630,6 +642,8 @@ class RatingManualService:
                 query["state"] = filter_by["state_id"]
             if "product_id" in filter_by:
                 query["product"] = filter_by["product_id"]
+            if "entity_id" in filter_by:
+                query["entity"] = filter_by["entity_id"]
             if "ratingtable_id" in filter_by:
                 # Filter by ratingtable_id - MongoDB will check if the value is in the ratingtable array
                 query["ratingtable"] = filter_by["ratingtable_id"]
@@ -659,7 +673,8 @@ class RatingManualService:
                     ratingmanual_data.lob,
                     ratingmanual_data.state,
                     ratingmanual_data.product,
-                    ratingmanual_data.ratingtable
+                    ratingmanual_data.ratingtable,
+                    ratingmanual_data.entity
                 )
                 
                 if ratingmanual_data.effective_date is not None:
@@ -667,12 +682,9 @@ class RatingManualService:
                 else:
                     effective_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                id_was_auto_generated = False
-                if ratingmanual_data.id is None or ratingmanual_data.id == 0:
-                    ratingmanual_id = await self._generate_ratingmanual_id()
-                    id_was_auto_generated = True
-                else:
-                    ratingmanual_id = ratingmanual_data.id
+                # Auto-generate ID
+                ratingmanual_id = await self._generate_ratingmanual_id()
+                id_was_auto_generated = True
                 
                 if use_transactions:
                     client = await get_client()

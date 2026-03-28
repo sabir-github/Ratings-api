@@ -28,10 +28,11 @@ class RatingPlanBase(BaseModel):
     lob: int = Field(..., description="Lob ID")
     state: int = Field(..., description="State ID")
     product: int = Field(..., description="Product ID")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     algorithm: int = Field(..., description="Algorithm ID")
 
 class RatingPlanCreate(RatingPlanBase):
-    id: Optional[int] = Field(None, description="Plan ID (auto-generated if not provided)")
+    pass
 
 class RatingPlanUpdate(BaseModel):
     """Only these fields can be updated: active, effective_date, expiration_date"""

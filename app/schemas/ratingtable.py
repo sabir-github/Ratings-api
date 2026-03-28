@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class RatingTableCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Table ID (optional, auto-generated if not provided)")
     table_name: str = Field(..., description="Table name (mandatory)")
     table_type: Optional[str] = Field(None, description="Table type (optional)")
     active: bool = Field(True, description="Active status")
@@ -16,6 +15,7 @@ class RatingTableCreateSchema(BaseModel):
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
     context: Optional[int] = Field(None, description="Context ID (optional)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     lookup_config: dict = Field(default_factory=dict, description="Lookup config")
     ai_metadata: dict = Field(default_factory=dict, description="AI Metadata")
 
@@ -26,7 +26,21 @@ class RatingTableCreateSchema(BaseModel):
         if len(v) > 100:
             raise ValueError('Table name cannot exceed 100 characters')
         return v.strip()
-    
+
+    @validator('company', 'lob', 'state', 'product', 'context', 'entity', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('company')
     def validate_company(cls, v):
         if not isinstance(v, int):
@@ -63,9 +77,17 @@ class RatingTableCreateSchema(BaseModel):
     def validate_context(cls, v):
         if v is not None:
             if not isinstance(v, int):
-                raise ValueError('Context must be an integer ID')
+                raise ValueError('ID must be an integer')
             if v <= 0:
-                raise ValueError('Context ID must be a positive integer')
+                raise ValueError('ID must be a positive integer')
+        return v
+
+    @validator('entity')
+    def validate_entity(cls, v):
+        if not isinstance(v, int):
+            raise ValueError('Entity must be an integer ID')
+        if v <= 0:
+            raise ValueError('Entity ID must be a positive integer')
         return v
     
     @model_validator(mode='after')
@@ -83,16 +105,17 @@ class RatingTableUpdateSchema(BaseModel):
     effective_date: Optional[datetime] = None
     expiration_date: Optional[datetime] = None
     context: Optional[int] = None
+    entity: Optional[int] = None
     lookup_config: Optional[dict] = None
     ai_metadata: Optional[dict] = None
 
-    @validator('context')
-    def validate_context(cls, v):
+    @validator('context', 'entity')
+    def validate_context_and_entity(cls, v):
         if v is not None:
             if not isinstance(v, int):
-                raise ValueError('Context must be an integer ID')
+                raise ValueError('ID must be an integer')
             if v <= 0:
-                raise ValueError('Context ID must be a positive integer')
+                raise ValueError('ID must be a positive integer')
         return v
     
     @model_validator(mode='after')
@@ -116,6 +139,7 @@ class RatingTableResponseSchema(BaseModel):
     state: int
     product: int
     context: Optional[int]
+    entity: int
     lookup_config: dict
     ai_metadata: dict
     created_at: datetime

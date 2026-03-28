@@ -69,6 +69,7 @@ async def get_ratingtables(
     state_id: Optional[int] = Query(None, description="Filter by state ID"),
     product_id: Optional[int] = Query(None, description="Filter by product ID"),
     context_id: Optional[int] = Query(None, description="Filter by context ID"),
+    entity_id: Optional[int] = Query(None, description="Filter by legal entity ID"),
     sort_by: Optional[str] = Query(None, description="Field to sort by"),
     sort_order: int = Query(1, ge=-1, le=1, description="Sort order (1 for ascending, -1 for descending)"),
     current_user: UserBase = Depends(get_current_user)
@@ -91,6 +92,8 @@ async def get_ratingtables(
         filter_by["product_id"] = product_id
     if context_id is not None:
         filter_by["context_id"] = context_id
+    if entity_id is not None:
+        filter_by["entity_id"] = entity_id
     
     return await ratingtable_service.get_ratingtables(
         skip=skip,
@@ -182,10 +185,8 @@ async def delete_ratingtable(
     ratingtable_id: int,
     current_user: UserBase = Depends(get_current_user)
 ):
-    """Delete a rating table"""
-    success = await ratingtable_service.delete_ratingtable(ratingtable_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Rating table not found")
+    """Delete a rating table. Idempotent: returns 204 whether the resource was deleted or already absent."""
+    await ratingtable_service.delete_ratingtable(ratingtable_id)
 
 @router.post("/import/excel", status_code=status.HTTP_200_OK)
 async def import_ratingtables_from_excel(
@@ -194,6 +195,7 @@ async def import_ratingtables_from_excel(
     lob: int = Form(..., description="LOB ID (mandatory)"),
     state: int = Form(..., description="State ID (mandatory)"),
     product: int = Form(..., description="Product ID (mandatory)"),
+    entity: int = Form(..., description="Legal entity ID (mandatory)"),
     context: Optional[str] = Form(None, description="Context ID (optional)"),
     table_type: Optional[str] = Form(None, description="Table type (optional)"),
     effective_date: Optional[str] = Form(None, description="Effective date in ISO format (optional, defaults to current date at midnight UTC)"),
@@ -215,6 +217,7 @@ async def import_ratingtables_from_excel(
     - lob: LOB ID
     - state: State ID
     - product: Product ID
+    - entity: Legal entity ID
     
     **Optional Parameters:**
     - context: Context ID (optional)
@@ -287,6 +290,8 @@ async def import_ratingtables_from_excel(
             raise HTTPException(status_code=400, detail="State ID must be a positive integer")
         if product <= 0:
             raise HTTPException(status_code=400, detail="Product ID must be a positive integer")
+        if entity <= 0:
+            raise HTTPException(status_code=400, detail="Entity ID must be a positive integer")
         if parsed_context is not None and parsed_context <= 0:
             raise HTTPException(status_code=400, detail="Context ID must be a positive integer if provided")
         
@@ -297,6 +302,7 @@ async def import_ratingtables_from_excel(
             lob=lob,
             state=state,
             product=product,
+            entity=entity,
             context=parsed_context,
             table_type=parsed_table_type,
             effective_date=parsed_effective_date

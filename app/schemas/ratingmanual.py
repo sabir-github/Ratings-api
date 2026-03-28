@@ -3,7 +3,6 @@ from typing import Optional, List
 from datetime import datetime
 
 class RatingManualCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Manual ID (optional, auto-generated if not provided)")
     manual_name: str = Field(..., description="Manual name (mandatory)")
     active: bool = Field(True, description="Active status")
     version: Optional[float] = Field(None, description="Version (optional, defaults to 1.0, auto-increments if record with same combination exists)")
@@ -13,6 +12,7 @@ class RatingManualCreateSchema(BaseModel):
     lob: int = Field(..., description="Lob ID (mandatory)")
     state: int = Field(..., description="State ID (mandatory)")
     product: int = Field(..., description="Product ID (mandatory)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     ratingtable: List[int] = Field(..., description="List of Rating Table IDs (mandatory)")
     priority: int = Field(..., description="Priority (mandatory)")
 
@@ -23,13 +23,47 @@ class RatingManualCreateSchema(BaseModel):
         if len(v) > 200:
             raise ValueError('Manual name cannot exceed 200 characters')
         return v.strip()
-    
-    @validator('company', 'lob', 'state', 'product')
-    def validate_id_fields(cls, v):
+
+    @validator('company', 'lob', 'state', 'product', 'entity', pre=True)
+    def coerce_id_to_int(cls, v):
+        """Accept string IDs (e.g. from Gemini/API) and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
+    @validator('company', 'lob', 'state', 'product', 'entity')
+    def validate_required_id_fields(cls, v):
         if not isinstance(v, int) or v <= 0:
             raise ValueError('ID must be a positive integer')
         return v
-    
+
+    @validator('ratingtable', pre=True)
+    def coerce_ratingtable_ids(cls, v):
+        """Accept list of string or int IDs and coerce to list of int."""
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            return v
+        out = []
+        for item in v:
+            if isinstance(item, int):
+                out.append(item)
+            elif isinstance(item, str):
+                try:
+                    out.append(int(item.strip()))
+                except ValueError:
+                    out.append(item)
+            else:
+                out.append(item)
+        return out
+
     @validator('ratingtable')
     def validate_ratingtable(cls, v):
         if v is None:
@@ -43,6 +77,20 @@ class RatingManualCreateSchema(BaseModel):
                 raise ValueError('All rating table IDs must be positive integers')
         return v
     
+    @validator('priority', pre=True)
+    def coerce_priority(cls, v):
+        """Accept string numbers and coerce to int."""
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            try:
+                return int(v.strip())
+            except ValueError:
+                pass
+        return v
+
     @validator('priority')
     def validate_priority(cls, v):
         if not isinstance(v, int):
@@ -93,6 +141,7 @@ class RatingManualResponseSchema(BaseModel):
     lob: int
     state: int
     product: int
+    entity: int
     ratingtable: List[int]
     priority: int
     created_at: datetime

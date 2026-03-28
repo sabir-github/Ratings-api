@@ -74,19 +74,37 @@ async def close_mongo_connection():
         logger.info("MongoDB connection closed")
 
 async def get_database() -> AsyncIOMotorClient:
-    """Get database instance, raising error if not connected"""
+    """Get database instance, raising error if not connected. Auto-initializes if needed."""
+    # Lazy initialization: if not connected, try to connect
     if not mongodb.connected or mongodb.database is None:
-        raise ConnectionFailure(
-            "Database not connected. Please ensure MongoDB is running and the connection was established."
-        )
+        try:
+            # Check if client exists but not connected
+            if mongodb.client is None:
+                await connect_to_mongo()
+            else:
+                # Client exists, verify connection
+                await verify_connection()
+        except Exception as e:
+            raise ConnectionFailure(
+                f"Database not connected. Please ensure MongoDB is running and the connection was established. Error: {e}"
+            )
     return mongodb.database
 
 async def get_client() -> AsyncIOMotorClient:
-    """Get MongoDB client instance for transactions, raising error if not connected"""
+    """Get MongoDB client instance for transactions, raising error if not connected. Auto-initializes if needed."""
+    # Lazy initialization: if not connected, try to connect
     if not mongodb.connected or mongodb.client is None:
-        raise ConnectionFailure(
-            "Database not connected. Please ensure MongoDB is running and the connection was established."
-        )
+        try:
+            # Check if client exists but not connected
+            if mongodb.client is None:
+                await connect_to_mongo()
+            else:
+                # Client exists, verify connection
+                await verify_connection()
+        except Exception as e:
+            raise ConnectionFailure(
+                f"Database not connected. Please ensure MongoDB is running and the connection was established. Error: {e}"
+            )
     return mongodb.client
 
 async def create_counter_collection():
@@ -184,6 +202,24 @@ async def create_counter_collection():
                 "sequence_value": 100000000
             })
             logger.info("Created ratingplan_id counter with initial value 100000000")
+
+        # Create counter for legal_entities if it doesn't exist
+        existing_legal_entity_counter = await counter_collection.find_one({"_id": "legal_entity_id"})
+        if not existing_legal_entity_counter:
+            await counter_collection.insert_one({
+                "_id": "legal_entity_id",
+                "sequence_value": 100000000
+            })
+            logger.info("Created legal_entity_id counter with initial value 100000000")
+
+        # Create counter for legal_entity_addresses if it doesn't exist
+        existing_legal_entity_address_counter = await counter_collection.find_one({"_id": "legal_entity_address_id"})
+        if not existing_legal_entity_address_counter:
+            await counter_collection.insert_one({
+                "_id": "legal_entity_address_id",
+                "sequence_value": 100000000
+            })
+            logger.info("Created legal_entity_address_id counter with initial value 100000000")
     except Exception as e:
         logger.error(f"Error creating counter collection: {e}")
 
@@ -240,6 +276,10 @@ async def create_indexes_and_validations():
     await company_collection.create_index("company_code", unique=True)
     await company_collection.create_index("company_name")
     await company_collection.create_index("active")
+    await company_collection.create_index("hq_address.Street1")
+    await company_collection.create_index("hq_address.City")
+    await company_collection.create_index("hq_address.CountryCode")
+    await company_collection.create_index("tax_id")
     
     # Create validation schema (updated to make id optional for auto-generation)
     await db.command({
@@ -265,6 +305,22 @@ async def create_indexes_and_validations():
                         "bsonType": "bool",
                         "description": "must be a boolean and is required"
                     },
+                    "hq_address": {
+                        "bsonType": ["object", "null"],
+                        "description": "Location of the main corporate office - structured object with Street1, Street2, City, State_Province, PostalCode, CountryCode (optional)",
+                        "properties": {
+                            "Street1": {"bsonType": ["string", "null"]},
+                            "Street2": {"bsonType": ["string", "null"]},
+                            "City": {"bsonType": ["string", "null"]},
+                            "State_Province": {"bsonType": ["string", "null"]},
+                            "PostalCode": {"bsonType": ["string", "null"]},
+                            "CountryCode": {"bsonType": ["string", "null"]}
+                        }
+                    },
+                    "tax_id": {
+                        "bsonType": ["string", "null"],
+                        "description": "The primary tax identification number for the parent group (optional)"
+                    },
                     "created_at": {
                         "bsonType": "date",
                         "description": "must be a date and is required"
@@ -278,7 +334,26 @@ async def create_indexes_and_validations():
         },
         "validationLevel": "strict"
     })
-    # Company collection indexes and validations
+
+    # Legal Entities collection
+    legal_entity_collection = db["legal_entities"]
+    await legal_entity_collection.create_index("id", unique=True)
+    await legal_entity_collection.create_index("company_id")
+    await legal_entity_collection.create_index("legal_name")
+    await legal_entity_collection.create_index("entity_type")
+    await legal_entity_collection.create_index("identifier")
+    await legal_entity_collection.create_index("jurisdiction")
+    await legal_entity_collection.create_index("active")
+
+    # Legal Entity Addresses collection
+    legal_entity_address_collection = db["legal_entity_addresses"]
+    await legal_entity_address_collection.create_index("id", unique=True)
+    await legal_entity_address_collection.create_index("legal_entity_id")
+    await legal_entity_address_collection.create_index("address_type")
+    await legal_entity_address_collection.create_index("city")
+    await legal_entity_address_collection.create_index("country_code")
+
+    # LOB collection indexes and validations
     lob_collection = db["lobs"]
       
     # Create indexes
@@ -487,6 +562,7 @@ async def create_indexes_and_validations():
     await ratingtable_collection.create_index("state")
     await ratingtable_collection.create_index("product")
     await ratingtable_collection.create_index("context")
+    await ratingtable_collection.create_index("entity")
     await ratingtable_collection.create_index("effective_date")
     await ratingtable_collection.create_index("expiration_date")
     
@@ -574,6 +650,10 @@ async def create_indexes_and_validations():
                         "bsonType": ["int", "null"],
                         "description": "must be an integer ID or null (optional)"
                     },
+                    "entity": {
+                        "bsonType": "int",
+                        "description": "must be an integer (legal_entity_id), required at application layer"
+                    },
                     "lookup_config": {
                         "bsonType": "object",
                         "description": "must be an object"
@@ -608,6 +688,7 @@ async def create_indexes_and_validations():
     await algorithm_collection.create_index("lob")
     await algorithm_collection.create_index("state")
     await algorithm_collection.create_index("product")
+    await algorithm_collection.create_index("entity")
     await algorithm_collection.create_index("effective_date")
     await algorithm_collection.create_index("expiration_date")
     await algorithm_collection.create_index("required_tables")
@@ -704,6 +785,10 @@ async def create_indexes_and_validations():
                         "bsonType": "int",
                         "description": "must be an integer ID and is required"
                     },
+                    "entity": {
+                        "bsonType": "int",
+                        "description": "must be an integer (legal_entity_id), required at application layer"
+                    },
                     "created_at": {
                         "bsonType": "date",
                         "description": "must be a date and is required"
@@ -729,6 +814,7 @@ async def create_indexes_and_validations():
     await ratingmanual_collection.create_index("lob")
     await ratingmanual_collection.create_index("state")
     await ratingmanual_collection.create_index("product")
+    await ratingmanual_collection.create_index("entity")
     await ratingmanual_collection.create_index("ratingtable")
     await ratingmanual_collection.create_index("effective_date")
     await ratingmanual_collection.create_index("expiration_date")
@@ -958,6 +1044,10 @@ async def create_indexes_and_validations():
                         "bsonType": "int",
                         "description": "must be an integer ID and is required"
                     },
+                    "entity": {
+                        "bsonType": "int",
+                        "description": "must be an integer (legal_entity_id), required at application layer"
+                    },
                     "ratingtable": {
                         "bsonType": "array",
                         "items": {
@@ -994,6 +1084,7 @@ async def create_indexes_and_validations():
     await ratingplan_collection.create_index("lob")
     await ratingplan_collection.create_index("state")
     await ratingplan_collection.create_index("product")
+    await ratingplan_collection.create_index("entity")
     await ratingplan_collection.create_index("algorithm")
     await ratingplan_collection.create_index("effective_date")
     await ratingplan_collection.create_index("expiration_date")
@@ -1213,6 +1304,10 @@ async def create_indexes_and_validations():
                     "product": {
                         "bsonType": "int",
                         "description": "must be an integer ID and is required"
+                    },
+                    "entity": {
+                        "bsonType": "int",
+                        "description": "must be an integer (legal_entity_id), required at application layer"
                     },
                     "algorithm": {
                         "bsonType": "int",

@@ -29,7 +29,7 @@ class ContextBase(BaseModel):
     
 
 class ContextCreate(ContextBase):
-    id: Optional[int] = Field(None, description="State ID (auto-generated if not provided)")
+    pass
 
 class ContextUpdate(BaseModel):
     state_name: Optional[str] = None

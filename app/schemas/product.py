@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class ProductCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Product ID (optional, auto-generated if not provided)")
     product_code: str = Field(..., description="product code")
     product_name: str = Field(..., description="product name")
     lob_id: int = Field(..., description="Lob ID")

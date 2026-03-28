@@ -31,11 +31,12 @@ class RatingTableBase(BaseModel):
     state: int = Field(..., description="State ID")
     product: int = Field(..., description="Product ID")
     context: Optional[int] = Field(None, description="Context ID (optional)")
+    entity: int = Field(..., description="Legal entity ID (mandatory)")
     lookup_config: dict = Field(default_factory=dict, description="Lookup config")
     ai_metadata: dict = Field(default_factory=dict, description="AI Metadata")
 
 class RatingTableCreate(RatingTableBase):
-    id: Optional[int] = Field(None, description="Rating ID (auto-generated if not provided)")
+    pass
 
 class RatingUpdate(BaseModel):
     table_name: Optional[str] = None
@@ -50,6 +51,7 @@ class RatingUpdate(BaseModel):
     state: Optional[int] = None
     product: Optional[int] = None
     context: Optional[int] = None
+    entity: Optional[int] = None
     lookup_config: Optional[dict] = None
     ai_metadata: Optional[dict] = None
 

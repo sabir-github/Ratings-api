@@ -3,7 +3,6 @@ from typing import Optional
 from datetime import datetime
 
 class LobCreateSchema(BaseModel):
-    id: Optional[int] = Field(None, description="Lob ID (optional, auto-generated if not provided)")
     lob_code: str = Field(..., description="Lob code")
     lob_name: str = Field(..., description="Lob name")
     lob_abbreviation: str = Field(..., description="Lob abbreviation")
