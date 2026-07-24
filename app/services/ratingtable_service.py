@@ -829,7 +829,22 @@ class RatingTableService:
                         existing_table, data_comparison, new_version, result, expired_id = await self._create_ratingtable_without_transaction(
                             collection, ratingtable_data, effective_date, ratingtable_id, now
                         )
-                        
+                        # No-change skip: _create_ratingtable_without_transaction returns result=None
+                        # when an identical record already exists (no data changes).
+                        if result is None and existing_table is not None:
+                            try:
+                                await rollback_sequence_value("ratingtable_id")
+                            except Exception:
+                                pass
+                            results.append({
+                                "message": "No changes found in data field. Record with same combination already exists.",
+                                "id": existing_table["id"],
+                                "existing_version": existing_table.get("version", 1.0),
+                                "data_comparison": data_comparison,
+                                "skipped": True
+                            })
+                            continue
+
                 except Exception as e:
                     # Rollback counter sequence if ID was auto-generated and record creation failed
                     if id_was_auto_generated:

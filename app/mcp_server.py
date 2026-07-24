@@ -3,22 +3,18 @@ MCP Server implementation for Ratings API
 Exposes all existing API endpoints as MCP tools for AI model interaction
 """
 import httpx
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import logging
 import os
 from app.core.config import settings
 
-# Import services for direct calls (more efficient than HTTP, avoids internal HTTP/auth issues)
+# Import services for direct calls (more efficient than HTTP)
 from app.services.company_service import company_service
-from app.services.evaluate_expression import evaluate_expression as evaluate_expression_service
+from app.services.legal_entity_service import legal_entity_service
+from app.services.legal_entity_address_service import legal_entity_address_service
+from app.services.evaluate_expression import evaluate_expression as _eval_service
 from app.schemas.company import CompanyCreateSchema, CompanyUpdateSchema
 from app.schemas.calculation import CalculationRequest
-from app.core.database import get_database
-
-try:
-    from app.services.ratingplan_service import ratingplan_service as _ratingplan_service
-except ImportError:
-    _ratingplan_service = None
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +54,16 @@ if MCP_AVAILABLE:
     mcp = FastMCP("Ratings API MCP Server")
 
 # Helper function to normalize boolean values
+def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    """Coerce value to int; returns default if invalid."""
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_bool(value: Any) -> Optional[bool]:
     """Convert string or other types to boolean, or return None"""
     if value is None:
@@ -76,50 +82,29 @@ def normalize_bool(value: Any) -> Optional[bool]:
     except (ValueError, TypeError):
         return None
 
-
-def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
-    """Coerce value to int for API params; handle Gemini string IDs. Returns default if invalid."""
-    if value is None:
-        return default
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-def _normalize_query_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Ensure query params are API-friendly: booleans as lowercase 'true'/'false' (FastAPI expects this)."""
-    if params is None:
-        return None
-    out = {}
-    for k, v in params.items():
-        if isinstance(v, bool):
-            out[k] = "true" if v else "false"
-        else:
-            out[k] = v
-    return out
-
-
 # Helper function to make API calls with performance optimizations
 async def call_api(method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
     """Make an API call and return the response with optimized error handling"""
     try:
-        if "params" in kwargs and kwargs["params"]:
-            kwargs["params"] = _normalize_query_params(kwargs["params"])
         response = await client.request(method, endpoint, **kwargs)
         response.raise_for_status()
-        
+
+        # 204 No Content (DELETE success) — no body to parse
+        if response.status_code == 204 or not response.content:
+            return {"status_code": response.status_code}
+
         # Parse JSON efficiently
         data = response.json()
-        
+
         # FastMCP requires dict responses, not lists
         # Wrap list responses in a dict (optimized for large lists)
         if isinstance(data, list):
             return {"items": data, "count": len(data)}
-        
+
         # If it's already a dict, return as is
         if isinstance(data, dict):
             return data
-        
+
         # For any other type, wrap it
         return {"data": data}
     except httpx.TimeoutException as e:
@@ -127,7 +112,12 @@ async def call_api(method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         return {"error": f"Request timeout: {str(e)}", "status_code": 408}
     except httpx.HTTPStatusError as e:
         logger.warning(f"API call failed with status {e.response.status_code}: {endpoint}")
-        return {"error": str(e), "status_code": e.response.status_code}
+        # Include the response body so callers can see the actual error reason
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = e.response.text
+        return {"error": str(e), "status_code": e.response.status_code, "detail": detail}
     except httpx.HTTPError as e:
         logger.error(f"API call failed: {endpoint} - {e}")
         return {"error": str(e), "status_code": None}
@@ -135,15 +125,6 @@ async def call_api(method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         logger.error(f"Unexpected error in API call {endpoint}: {e}")
         return {"error": str(e)}
 
-
-# Helper function to ensure database is initialized before tool execution
-async def ensure_database_initialized():
-    """Ensure database connection is initialized (lazy initialization)"""
-    try:
-        await get_database()
-    except Exception as e:
-        logger.warning(f"Database initialization warning: {e}")
-        # Don't raise - let the tool handle the error
 
 # Tool registry for HTTP access (maps tool names to functions)
 # This allows tools to be called via HTTP endpoints even if _tools is not populated
@@ -157,24 +138,20 @@ if MCP_AVAILABLE and mcp is not None:
         skip: int = 0,
         limit: int = 100,
         active: Union[bool, str, None] = None,
-        company_name: Optional[str] = None,
-        company_code: Optional[str] = None,
-        tax_id: Optional[str] = None
+        company_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List insurance companies. Use when user asks to list companies, find company by name, code, or tax ID, or filter by active. Returns items (id, company_code, company_name, active, hq_address, tax_id) and count.
+        Get a list of insurance companies with full details.
         
         Purpose:
         Retrieves insurance companies from the system. Companies are the top-level entities
         in the ratings hierarchy and represent insurance carriers or organizations that
-        provide insurance products. Use this tool to browse, search, or filter companies by name,
-        code, or tax ID when setting up rating configurations or managing company data.
+        provide insurance products. Use this tool to browse, search, or filter companies
+        when setting up rating configurations or managing company data.
         
         Usage Examples:
         - Get all active companies: active=True, limit=100
         - Search for a specific company: company_name="Global Insurance"
-        - Search by company code: company_code="GLOB"
-        - Search by tax ID: tax_id="12-3456789"
         - Get inactive companies: active=False
         - Paginate through companies: skip=100, limit=50
         
@@ -183,8 +160,6 @@ if MCP_AVAILABLE and mcp is not None:
             limit: Maximum number of records to return (default: 100, max: 1000)
             active: Filter by active status (True/False/None). None returns all.
             company_name: Optional partial match filter for company name (case-insensitive)
-            company_code: Optional partial match filter for company code (case-insensitive)
-            tax_id: Optional partial match filter for tax ID (case-insensitive)
             
         Returns:
             Dictionary with:
@@ -193,29 +168,91 @@ if MCP_AVAILABLE and mcp is not None:
               * company_code: Short code (e.g., 'ABC', 'GLOB')
               * company_name: Full legal name
               * active: Boolean indicating if company is active
-              * hq_address: Structured address object (optional) - Street1, Street2, City, State_Province, PostalCode, CountryCode
-              * tax_id: Primary tax identification number for the parent group (optional)
               * created_at: Timestamp of creation
               * updated_at: Timestamp of last update
             - count: Number of items returned
             
         When to Use:
         - User asks to "list companies", "show all companies", "get companies"
-        - Need to find a company by name, code, or tax ID
+        - Need to find a company by name or code
         - Setting up rating configurations that require company selection
         - Verifying company exists before creating related entities (LOBs, products, etc.)
         """
-        params = {"skip": skip, "limit": limit}
-        active_bool = normalize_bool(active)
-        if active_bool is not None:
-            params["active"] = active_bool
-        if company_name:
-            params["company_name"] = company_name
-        if company_code:
-            params["company_code"] = company_code
-        if tax_id:
-            params["tax_id"] = tax_id
-        return await call_api("GET", "/companies/", params=params)
+        try:
+            # Cap limit to prevent excessive data transfer
+            limit = min(limit, 1000)
+            filter_by = {}
+            active_bool = normalize_bool(active)
+            if active_bool is not None:
+                filter_by["active"] = active_bool
+            if company_name:
+                filter_by["company_name"] = company_name
+            
+            results = await company_service.get_companies(
+                skip=skip,
+                limit=limit,
+                filter_by=filter_by if filter_by else None
+            )
+            # Convert to list of dicts (compatible with Pydantic v1 and v2)
+            items = []
+            for r in results:
+                if hasattr(r, 'model_dump'):
+                    items.append(r.model_dump())
+                elif hasattr(r, 'dict'):
+                    items.append(r.dict())
+                else:
+                    items.append(r)
+            return {"items": items, "count": len(items)}
+        except Exception as e:
+            logger.error(f"Error getting companies: {e}")
+            return {"error": str(e), "status_code": 500}
+
+    @mcp.tool()
+    async def get_company(company_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific company by its name.
+        
+        Purpose:
+        Retrieves complete details for a single insurance company. Use this when you
+        have a company ID and need to verify its details, check its active status,
+        or retrieve its information for use in other operations.
+        
+        Usage Examples:
+        - Get company with name SAILESH
+        - Verify company exists before updating: get_company(5) to check if company 5 exists
+        - Retrieve company details for display: get_company(company_id)
+        
+        Args:
+            company_id: The unique integer ID of the company to retrieve.
+            
+        Returns:
+            Company object with fields:
+            - id: Unique integer identifier
+            - company_code: Short code (e.g., 'ABC', 'GLOB')
+            - company_name: Full legal name
+            - active: Boolean indicating if company is active
+            - created_at: Timestamp of creation
+            - updated_at: Timestamp of last update
+            
+        When to Use:
+        - User provides a company ID and asks for details
+        - Need to verify company exists before creating related entities
+        - Displaying company information in responses
+        - Checking company status before operations
+        """
+        try:
+            result = await company_service.get_company(company_id)
+            if result is None:
+                return {"error": f"Company with ID {company_id} not found", "status_code": 404}
+            # Convert Pydantic model to dict (compatible with v1 and v2)
+            if hasattr(result, 'model_dump'):
+                return result.model_dump()
+            elif hasattr(result, 'dict'):
+                return result.dict()
+            return result
+        except Exception as e:
+            logger.error(f"Error getting company: {e}")
+            return {"error": str(e), "status_code": 500}
 
     @mcp.tool()
     async def get_legal_entities(
@@ -228,34 +265,68 @@ if MCP_AVAILABLE and mcp is not None:
         jurisdiction: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        List legal entities. Use when user asks for legal entities, entities by company, or to find entities by name/type/jurisdiction. Returns items and count.
+        Get a list of legal entities (registered entities that hold insurance licenses).
 
-        Legal entities are registered entities that enter into legal contracts and hold insurance licenses.
-        Each entity links to a parent Company. Returns: id, company_id, legal_name, entity_type,
-        identifier (LEI), jurisdiction, registration_number, active, created_at, updated_at.
+        Purpose:
+        Legal entities are registered entities (corporations, partnerships, trusts) that
+        hold insurance licenses; each links to a parent company via company_id. Use this
+        tool to resolve an entity_id when the user provides a legal entity name, or to
+        browse entities for a given company.
+
+        Usage Examples:
+        - Find an entity by name: legal_name="VVR_ENTITY_DEMO"
+        - List entities for a company: company_id=100000003
+        - Get all active entities: active=True
 
         Args:
-            skip: Pagination offset (default: 0)
-            limit: Max records to return (default: 100, max: 1000)
-            active: Filter by active status (True/False/None)
-            company_id: Filter by parent company ID
-            legal_name: Partial match filter for legal name
-            entity_type: Partial match for entity type (Corporation, Partnership, Trust, etc.)
-            jurisdiction: Partial match for jurisdiction (state/country of registration)
+            skip: Number of records to skip for pagination (default: 0)
+            limit: Maximum number of records to return (default: 100, max: 1000)
+            active: Filter by active status (True/False/None). None returns all.
+            company_id: Filter by parent company ID.
+            legal_name: Partial match filter for legal entity name (case-insensitive).
+            entity_type: Partial match filter for entity type (e.g. "Admitted products").
+            jurisdiction: Partial match filter for jurisdiction.
+
+        Returns:
+            Dictionary with:
+            - items: List of legal entity objects (id, company_id, legal_name, entity_type,
+              identifier, jurisdiction, registration_number, active, created_at, updated_at)
+            - count: Number of items returned
+
+        When to Use:
+        - User asks for legal entities, or to resolve an entity_id from a name
+        - Need entity_id for rating tables/algorithms/plans/manuals scope
         """
-        params = {"skip": skip, "limit": limit}
-        active_bool = normalize_bool(active)
-        if active_bool is not None:
-            params["active"] = active_bool
-        if company_id is not None:
-            params["company_id"] = int(company_id)
-        if legal_name:
-            params["legal_name"] = legal_name
-        if entity_type:
-            params["entity_type"] = entity_type
-        if jurisdiction:
-            params["jurisdiction"] = jurisdiction
-        return await call_api("GET", "/legal-entities/", params=params)
+        try:
+            limit = min(limit, 1000)
+            filter_by: Dict[str, Any] = {}
+            active_bool = normalize_bool(active)
+            if active_bool is not None:
+                filter_by["active"] = active_bool
+            if company_id is not None:
+                filter_by["company_id"] = company_id
+            if legal_name:
+                filter_by["legal_name"] = legal_name
+            if entity_type:
+                filter_by["entity_type"] = entity_type
+            if jurisdiction:
+                filter_by["jurisdiction"] = jurisdiction
+
+            results = await legal_entity_service.get_legal_entities(
+                skip=skip, limit=limit, filter_by=filter_by if filter_by else None
+            )
+            items = []
+            for r in results:
+                if hasattr(r, 'model_dump'):
+                    items.append(r.model_dump())
+                elif hasattr(r, 'dict'):
+                    items.append(r.dict())
+                else:
+                    items.append(r)
+            return {"items": items, "count": len(items)}
+        except Exception as e:
+            logger.error(f"Error getting legal entities: {e}")
+            return {"error": str(e), "status_code": 500}
 
     @mcp.tool()
     async def get_legal_entity_addresses(
@@ -267,97 +338,229 @@ if MCP_AVAILABLE and mcp is not None:
         country_code: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        List legal entity addresses. Use when user asks for addresses of a legal entity, or addresses by type (Registered, Physical, Mailing). Returns items and count.
+        Get a list of legal entity addresses (Registered, Physical, Mailing).
 
-        Addresses can be Registered, Physical, or Mailing. Each address has full_address (string) and/or
-        broken-down components (street1, street2, city, state_province, postal_code, country_code).
+        Purpose:
+        Retrieves address records for legal entities. Use when the user asks for the
+        address(es) of a specific legal entity.
 
         Args:
-            skip: Pagination offset (default: 0)
-            limit: Max records to return (default: 100, max: 1000)
-            legal_entity_id: Filter by legal entity ID
-            address_type: Partial match for type (Registered, Physical, Mailing)
-            city: Partial match for city
-            country_code: Partial match for country code
+            skip: Number of records to skip for pagination (default: 0)
+            limit: Maximum number of records to return (default: 100, max: 1000)
+            legal_entity_id: Filter by parent legal entity ID.
+            address_type: Filter by address type (e.g. "Registered", "Physical", "Mailing").
+            city: Partial match filter for city (case-insensitive).
+            country_code: Partial match filter for country code.
+
+        Returns:
+            Dictionary with:
+            - items: List of address objects (id, legal_entity_id, address_type, street1,
+              street2, city, state_province, postal_code, country_code, full_address, ...)
+            - count: Number of items returned
+
+        When to Use:
+        - User asks for the address(es) of a legal entity
         """
-        params = {"skip": skip, "limit": limit}
-        if legal_entity_id is not None:
-            params["legal_entity_id"] = int(legal_entity_id)
-        if address_type:
-            params["address_type"] = address_type
-        if city:
-            params["city"] = city
-        if country_code:
-            params["country_code"] = country_code
-        return await call_api("GET", "/legal-entity-addresses/", params=params)
+        try:
+            limit = min(limit, 1000)
+            filter_by: Dict[str, Any] = {}
+            if legal_entity_id is not None:
+                filter_by["legal_entity_id"] = legal_entity_id
+            if address_type:
+                filter_by["address_type"] = address_type
+            if city:
+                filter_by["city"] = city
+            if country_code:
+                filter_by["country_code"] = country_code
 
-    # @mcp.tool()
-    # async def get_company(company_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get detailed information about a specific company by its ID.
-    #     
-    #     Purpose:
-    #     Retrieves complete details for a single insurance company. Use this when you
-    #     have a company ID and need to verify its details, check its active status,
-    #     or retrieve its information for use in other operations.
-    #     
-    #     Usage Examples:
-    #     - Get company with ID 1: company_id=1
-    #     - Verify company exists before updating: get_company(5) to check if company 5 exists
-    #     - Retrieve company details for display: get_company(company_id)
-    #     
-    #     Args:
-    #         company_id: The unique integer ID of the company to retrieve.
-    #         
-    #     Returns:
-    #         Company object with fields:
-    #         - id: Unique integer identifier
-    #         - company_code: Short code (e.g., 'ABC', 'GLOB')
-    #         - company_name: Full legal name
-    #         - active: Boolean indicating if company is active
-    #         - hq_address: Structured address (Street1, Street2, City, State_Province, PostalCode, CountryCode) (optional)
-    #         - tax_id: Primary tax identification number for the parent group (optional)
-    #         - created_at: Timestamp of creation
-    #         - updated_at: Timestamp of last update
-    #         
-    #     When to Use:
-    #     - User provides a company ID and asks for details
-    #     - Need to verify company exists before creating related entities
-    #     - Displaying company information in responses
-    #     - Checking company status before operations
-    #     """
-    #     try:
-    #         result = await company_service.get_company(company_id)
-    #         if result is None:
-    #             return {"error": f"Company with ID {company_id} not found", "status_code": 404}
-    #         # Convert Pydantic model to dict (compatible with v1 and v2)
-    #         if hasattr(result, 'model_dump'):
-    #             return result.model_dump()
-    #         elif hasattr(result, 'dict'):
-    #             return result.dict()
-    #         return result
-    #     except Exception as e:
-    #         logger.error(f"Error getting company: {e}")
-    #         return {"error": str(e), "status_code": 500}
+            results = await legal_entity_address_service.get_addresses(
+                skip=skip, limit=limit, filter_by=filter_by if filter_by else None
+            )
+            items = []
+            for r in results:
+                if hasattr(r, 'model_dump'):
+                    items.append(r.model_dump())
+                elif hasattr(r, 'dict'):
+                    items.append(r.dict())
+                else:
+                    items.append(r)
+            return {"items": items, "count": len(items)}
+        except Exception as e:
+            logger.error(f"Error getting legal entity addresses: {e}")
+            return {"error": str(e), "status_code": 500}
 
-    # @mcp.tool()
-    # async def create_company(
-    #     company_code: str,
-    #     company_name: str,
-    #     active: bool = True
-    # ) -> Dict[str, Any]:
-    #     """Create a new insurance company. (Commented out - create/update/delete disabled.)"""
-    #     return {"error": "create_company is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_company(
+        company_code: str,
+        company_name: str,
+        active: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Create a new insurance company in the Ratings API.
+        
+        Purpose:
+        Adds a new insurance company to the system. Companies are the foundation of the
+        rating hierarchy - all rating configurations (LOBs, products, states, etc.)
+        are associated with a company. Before creating rating plans or tables, you must
+        first create or identify the company.
+        
+        Usage Examples:
+        - Create active company: company_code="ABC", company_name="ABC Insurance Corp", active=True
+        - Create inactive company: company_code="XYZ", company_name="XYZ Insurance", active=False
+        - Company code should be short and unique (e.g., "GLOB", "PNC", "STATE")
+        
+        Args:
+            company_code: Unique short code for the company (e.g., 'ABC', 'GLOB', 'PNC').
+                         Max 10 characters. Must be unique across all companies.
+            company_name: Full legal name of the company. Max 100 characters.
+                         Example: "Global Insurance Corporation" or "ABC Insurance Company"
+            active: Initial active status (defaults to True). Set to False to create
+                   an inactive company that won't appear in active listings.
+            
+        Returns:
+            Created company object with all fields including auto-generated 'id',
+            'created_at', and 'updated_at' timestamps.
+            
+        When to Use:
+        - User says "create company", "add company", "new company"
+        - Setting up a new insurance carrier in the system
+        - Need to establish company before creating rating configurations
+        - Importing company data from external sources
+        
+        Important Notes:
+        - The 'id' is automatically generated - do not provide it
+        - Company code must be unique - check existing companies first
+        - Company name should be the full legal name
+        """
+        try:
+            logger.info(f"Creating company with code={company_code}, name={company_name}, active={active}")
+            # Convert parameters to schema and call service directly (avoids auth issues)
+            company_schema = CompanyCreateSchema(
+                company_code=company_code,
+                company_name=company_name,
+                active=active
+            )
+            result = await company_service.create_company(company_schema)
+            # Convert Pydantic model to dict (compatible with v1 and v2)
+            if hasattr(result, 'model_dump'):
+                response = result.model_dump()
+            elif hasattr(result, 'dict'):
+                response = result.dict()
+            else:
+                response = result
+            
+            logger.info(f"Successfully created company: {response.get('id', 'unknown')}")
+            return response
+        except ValueError as e:
+            error_msg = str(e)
+            logger.error(f"Validation error creating company: {error_msg}")
+            # Re-raise ValueError so it can be properly handled by the protocol endpoint
+            raise ValueError(error_msg)
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error creating company: {error_msg}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Re-raise exception so it can be properly handled by the protocol endpoint
+            raise
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_company(company_id: int, company_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update company. (Commented out.)"""
-    #     return {"error": "update_company is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_company(company_id: int, company_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing company's information.
+        
+        Purpose:
+        Modifies one or more fields of an existing insurance company. Use this to change
+        company name, update active status, or correct company information. Only the
+        fields provided in company_data will be updated; other fields remain unchanged.
+        
+        Usage Examples:
+        - Update company name: company_data={"company_name": "New Company Name"}
+        - Deactivate company: company_data={"active": False}
+        - Update multiple fields: company_data={"company_name": "New Name", "active": True}
+        - Change company code: company_data={"company_code": "NEWCODE"}
+        
+        Args:
+            company_id: The unique integer ID of the company to update.
+            company_data: Dictionary containing fields to update. Valid fields:
+                         - company_name: Full legal name (max 100 chars)
+                         - company_code: Short code (max 10 chars, must be unique)
+                         - active: Boolean status
+            
+        Returns:
+            Updated company object with all fields, including updated 'updated_at' timestamp.
+            Returns error if company not found.
+            
+        When to Use:
+        - User says "update company", "change company", "modify company"
+        - Need to correct company information
+        - Activating or deactivating a company
+        - Renaming a company due to merger or rebranding
+        
+        Important Notes:
+        - Company code must remain unique if changed
+        - Only provide fields that need updating
+        - Company ID cannot be changed
+        """
+        try:
+            update_schema = CompanyUpdateSchema(**company_data)
+            result = await company_service.update_company(company_id, update_schema)
+            if result is None:
+                return {"error": f"Company with ID {company_id} not found", "status_code": 404}
+            # Convert Pydantic model to dict (compatible with v1 and v2)
+            if hasattr(result, 'model_dump'):
+                return result.model_dump()
+            elif hasattr(result, 'dict'):
+                return result.dict()
+            return result
+        except ValueError as e:
+            logger.error(f"Validation error updating company: {e}")
+            return {"error": str(e), "status_code": 400}
+        except Exception as e:
+            logger.error(f"Error updating company: {e}")
+            return {"error": str(e), "status_code": 500}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_company(company_id: int) -> Dict[str, Any]:
-    #     """Delete company. (Commented out.)"""
-    #     return {"error": "delete_company is disabled", "status_code": 403}
+    @mcp.tool()
+    async def delete_company(company_id: int) -> Dict[str, Any]:
+        """
+        Delete a company by its unique ID.
+        
+        Purpose:
+        Permanently removes an insurance company from the system. This is a destructive
+        operation that should be used with caution. Consider deactivating the company
+        (update with active=False) instead of deleting, as deletion may affect related
+        rating configurations, products, and historical data.
+        
+        Usage Examples:
+        - Delete company with ID 5: company_id=5
+        - Should typically verify company exists first: get_company(5) then delete_company(5)
+        
+        Args:
+            company_id: The unique integer ID of the company to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if company not found.
+            
+        When to Use:
+        - User explicitly requests to "delete company", "remove company"
+        - Data cleanup operations
+        - Removing test or duplicate companies
+        
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related entities (LOBs, products, rating tables, etc.)
+        - Consider deactivating (active=False) instead of deleting
+        - Always verify company ID before deletion
+        """
+        try:
+            result = await company_service.delete_company(company_id)
+            if not result:
+                return {"error": f"Company with ID {company_id} not found", "status_code": 404}
+            return {"message": f"Company {company_id} deleted successfully", "deleted": True}
+        except Exception as e:
+            logger.error(f"Error deleting company: {e}")
+            return {"error": str(e), "status_code": 500}
+
 
     # LOBs endpoints
     @mcp.tool()
@@ -368,7 +571,7 @@ if MCP_AVAILABLE and mcp is not None:
         lob_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List lines of business (LOBs). Use when user asks for LOBs, lines of business, or to filter by company. Returns items (id, lob_code, lob_name, active) and count.
+        Get a list of lines of business (LOBs) with full details.
         
         Purpose:
         Retrieves insurance lines of business (LOBs) from the system. LOBs represent
@@ -404,65 +607,134 @@ if MCP_AVAILABLE and mcp is not None:
         - Setting up rating configurations that require LOB selection
         - Verifying LOB exists before creating products
         """
-        try:
-            # Coerce types in case Gemini sends strings or omits args
-            skip_val = int(skip) if skip is not None else 0
-            limit_val = min(int(limit) if limit is not None else 100, 1000)
-            params = {"skip": skip_val, "limit": limit_val}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                params["active"] = active_bool
-            if lob_name is not None and str(lob_name).strip():
-                params["lob_name"] = str(lob_name).strip()
-            result = await call_api("GET", "/lobs/", params=params)
-            return result
-        except (TypeError, ValueError) as e:
-            logger.warning(f"get_lobs argument error: {e}")
-            return {"error": f"Invalid arguments: {e}", "status_code": 400}
-        except Exception as e:
-            logger.error(f"get_lobs failed: {e}", exc_info=True)
-            return {"error": str(e), "status_code": 500}
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if lob_name:
+            params["lob_name"] = lob_name
+        return await call_api("GET", "/lobs/", params=params)
 
 
-    # @mcp.tool()
-    # async def get_lob(lob_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get detailed information about a specific line of business by its ID.
-    #     
-    #     Purpose:
-    #     Retrieves complete details for a single LOB. Use this when you have a LOB ID
-    #     and need to verify its details, check its active status, or retrieve its
-    #     information for use in other operations.
-    #     
-    #     Args:
-    #         lob_id: The unique integer ID of the LOB to retrieve.
-    #         
-    #     Returns:
-    #         LOB object with fields: id, lob_code, lob_name, lob_abbreviation, active,
-    #         created_at, updated_at.
-    #         
-    #     When to Use:
-    #     - User provides a LOB ID and asks for details
-    #     - Need to verify LOB exists before creating related entities
-    #     - Displaying LOB information in responses
-    #     """
-    #     return await call_api("GET", f"/lobs/{lob_id}")
+    @mcp.tool()
+    async def get_lob(lob_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific line of business by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single LOB. Use this when you have a LOB ID
+        and need to verify its details, check its active status, or retrieve its
+        information for use in other operations.
+        
+        Args:
+            lob_id: The unique integer ID of the LOB to retrieve.
+            
+        Returns:
+            LOB object with fields: id, lob_code, lob_name, lob_abbreviation, active,
+            created_at, updated_at.
+            
+        When to Use:
+        - User provides a LOB ID and asks for details
+        - Need to verify LOB exists before creating related entities
+        - Displaying LOB information in responses
+        """
+        return await call_api("GET", f"/lobs/{lob_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_lob(lob_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create LOB. (Commented out.)"""
-    #     return {"error": "create_lob is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_lob(lob_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new Line of Business (LOB) in the Ratings API.
+        
+        Purpose:
+        Adds a new insurance line of business to the system. LOBs categorize different
+        types of insurance coverage (e.g., Auto, Home, Commercial). They are required
+        before creating products and rating configurations. Common LOBs include Auto,
+        Homeowners, Commercial General Liability, Workers Compensation, etc.
+        
+        Usage Examples:
+        - Create Auto LOB: lob_data={"lob_code": "AUTO", "lob_name": "Automobile", "lob_abbreviation": "AUTO"}
+        - Create Home LOB: lob_data={"lob_code": "HOME", "lob_name": "Homeowners", "lob_abbreviation": "HO"}
+        - Create inactive LOB: lob_data={..., "active": False}
+        
+        Args:
+            lob_data: Dictionary containing LOB details:
+                - lob_code (str, required): Unique code (e.g., 'AUTO', 'HOME', 'COMM'). Max 10 chars.
+                - lob_name (str, required): Full name (e.g., 'Automobile Insurance').
+                - lob_abbreviation (str, required): Short abbreviation (e.g., 'AUTO', 'HO').
+                - active (bool, optional): Initial active status (defaults to True).
+                
+        Returns:
+            Created LOB object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create LOB", "add line of business", "new LOB"
+        - Setting up new insurance coverage types
+        - Importing LOB data from external sources
+        
+        Important Notes:
+        - The 'id' is automatically generated - do not provide it
+        - LOB code must be unique
+        """
+        return await call_api("POST", "/lobs/", json=lob_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_lob(lob_id: int, lob_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update LOB. (Commented out.)"""
-    #     return {"error": "update_lob is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_lob(lob_id: int) -> Dict[str, Any]:
-    #     """Delete LOB. (Commented out.)"""
-    #     return {"error": "delete_lob is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_lob(lob_id: int, lob_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing Line of Business (LOB).
+        
+        Purpose:
+        Modifies one or more fields of an existing LOB. Use this to change LOB name,
+        update active status, or correct LOB information. Only the fields provided
+        in lob_data will be updated.
+        
+        Args:
+            lob_id: The unique integer ID of the LOB to update.
+            lob_data: Dictionary containing fields to update. Valid fields:
+                     - lob_name: Full name
+                     - lob_code: Short code (must be unique)
+                     - lob_abbreviation: Short abbreviation
+                     - active: Boolean status
+            
+        Returns:
+            Updated LOB object with all fields, including updated 'updated_at' timestamp.
+            
+        When to Use:
+        - User says "update LOB", "change LOB", "modify line of business"
+        - Need to correct LOB information
+        - Activating or deactivating a LOB
+        """
+        return await call_api("PUT", f"/lobs/{lob_id}", json=lob_data)
+
+
+    @mcp.tool()
+    async def delete_lob(lob_id: int) -> Dict[str, Any]:
+        """
+        Delete a Line of Business (LOB) by its unique ID.
+        
+        Purpose:
+        Permanently removes a LOB from the system. This is a destructive operation.
+        Consider deactivating the LOB (update with active=False) instead of deleting,
+        as deletion may affect related products and rating configurations.
+        
+        Args:
+            lob_id: The unique integer ID of the LOB to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if LOB not found.
+            
+        When to Use:
+        - User explicitly requests to "delete LOB", "remove line of business"
+        - Data cleanup operations
+        
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related entities (products, rating tables, etc.)
+        - Consider deactivating (active=False) instead of deleting
+        """
+        return await call_api("DELETE", f"/lobs/{lob_id}")
+
 
     # Products endpoints
     @mcp.tool()
@@ -473,7 +745,7 @@ if MCP_AVAILABLE and mcp is not None:
         product_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List insurance products. Use when user asks for products or to filter by company/LOB. Returns items (id, product_code, product_name, lob_id, active) and count.
+        Get a list of insurance products with full details.
         
         Purpose:
         Retrieves insurance products from the system. Products are specific insurance
@@ -511,43 +783,115 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", "/products/", params=params)
 
 
-    # @mcp.tool()
-    # async def get_product(product_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get detailed information about a specific product by its ID.
-    #     
-    #     Purpose:
-    #     Retrieves complete details for a single product. Use this when you have a product ID
-    #     and need to verify its details, check its LOB association, or retrieve its information.
-    #     
-    #     Args:
-    #         product_id: The unique integer ID of the product to retrieve.
-    #         
-    #     Returns:
-    #         Product object with fields: id, product_code, product_name, lob_id, active,
-    #         created_at, updated_at.
-    #         
-    #     When to Use:
-    #     - User provides a product ID and asks for details
-    #     - Need to verify product exists before creating rating configurations
-    #     """
-    #     return await call_api("GET", f"/products/{product_id}")
+    @mcp.tool()
+    async def get_product(product_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific product by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single product. Use this when you have a product ID
+        and need to verify its details, check its LOB association, or retrieve its information.
+        
+        Args:
+            product_id: The unique integer ID of the product to retrieve.
+            
+        Returns:
+            Product object with fields: id, product_code, product_name, lob_id, active,
+            created_at, updated_at.
+            
+        When to Use:
+        - User provides a product ID and asks for details
+        - Need to verify product exists before creating rating configurations
+        """
+        return await call_api("GET", f"/products/{product_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_product(product_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create product. (Commented out.)"""
-    #     return {"error": "create_product is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_product(product_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new insurance product in the Ratings API.
+        
+        Purpose:
+        Adds a new insurance product to the system. Products are specific offerings within
+        a Line of Business (e.g., "Standard Auto", "Preferred Auto" under Auto LOB).
+        Products must be associated with an existing LOB. They are required before creating
+        rating tables, algorithms, and rating plans.
+        
+        Usage Examples:
+        - Create Standard Auto product: product_data={"product_code": "STD_AUTO", "product_name": "Standard Automobile", "lob_id": 1}
+        - Create Preferred Home product: product_data={"product_code": "PREF_HO", "product_name": "Preferred Homeowners", "lob_id": 2, "active": True}
+        
+        Args:
+            product_data: Dictionary containing:
+                - product_code (str, required): Unique code (e.g., 'STD_AUTO', 'PREF_HO')
+                - product_name (str, required): Full name (e.g., 'Standard Automobile Insurance')
+                - lob_id (int, required): ID of the Line of Business this product belongs to
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created product object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create product", "add product", "new product"
+        - Setting up new insurance product offerings
+        - Need to verify LOB exists first (use get_lob or get_lobs)
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - lob_id must reference an existing LOB
+        - Product code should be unique
+        """
+        return await call_api("POST", "/products/", json=product_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_product(product_id: int, product_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update product. (Commented out.)"""
-    #     return {"error": "update_product is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_product(product_id: int) -> Dict[str, Any]:
-    #     """Delete product. (Commented out.)"""
-    #     return {"error": "delete_product is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_product(product_id: int, product_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing product.
+        
+        Purpose:
+        Modifies one or more fields of an existing product. Use this to change product name,
+        update active status, change LOB association, or correct product information.
+        
+        Args:
+            product_id: The unique integer ID of the product to update.
+            product_data: Dictionary containing fields to update:
+                         - product_name: Full name
+                         - product_code: Unique code (must be unique)
+                         - lob_id: Line of Business ID (must exist)
+                         - active: Boolean status
+            
+        Returns:
+            Updated product object with all fields.
+            
+        When to Use:
+        - User says "update product", "change product", "modify product"
+        - Need to correct product information or change LOB association
+        """
+        return await call_api("PUT", f"/products/{product_id}", json=product_data)
+
+
+    @mcp.tool()
+    async def delete_product(product_id: int) -> Dict[str, Any]:
+        """
+        Delete a product by its unique ID.
+        
+        Purpose:
+        Permanently removes a product from the system. This is a destructive operation.
+        Consider deactivating the product (update with active=False) instead of deleting.
+        
+        Args:
+            product_id: The unique integer ID of the product to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related rating configurations
+        - Consider deactivating (active=False) instead of deleting
+        """
+        return await call_api("DELETE", f"/products/{product_id}")
 
 
     # States endpoints
@@ -559,91 +903,149 @@ if MCP_AVAILABLE and mcp is not None:
         state_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List or find states from the system. Use when user asks to list states, show states, or to find a specific state by name or code (e.g. State = ALL, State = NY, California). Pass state_name to search: e.g. state_name="ALL" to find state ALL, state_name="NY" for New York. Returns items (id, state_code, state_name, active) and count.
+        Get a list of US states with full details.
         
         Purpose:
-        Retrieves US states from the system (API/database). States are used in rating configurations
+        Retrieves US states from the system. States are used in rating configurations
         to specify geographic jurisdictions for insurance products. Rating factors,
         tables, and plans are often state-specific. Use this to browse states, search
-        for specific ones (including state code or name like ALL), or filter by status.
+        for specific ones, or filter by status.
         
         Usage Examples:
-        - Find State = ALL: state_name="ALL"
-        - Find NY or New York: state_name="NY" or state_name="New York"
-        - Get all states: limit=100 (omit state_name)
         - Get all active states: active=True, limit=100
+        - Search for California: state_name="California" or state_name="CA"
+        - Get all states: limit=100 (typically 50 US states)
         
         Args:
             skip: Number of records to skip for pagination (default: 0)
             limit: Maximum number of records to return (default: 100)
             active: Filter by active status (True/False/None). None returns all.
-            state_name: Search by state name or code (partial match, case-insensitive). Use for "State = ALL" or any specific state.
+            state_name: Optional partial match filter for state name (case-insensitive)
             
         Returns:
             Dictionary with items list and count. Each state contains:
-            id, state_code (2-letter code like 'NY', 'CA', or 'ALL'), state_name, active.
+            id, state_code (2-letter code like 'NY', 'CA'), state_name, active.
             
         When to Use:
-        - User says "State = ALL", "find state ALL", or asks for a specific state by name/code
-        - User asks to "list all states", "list states", "show states", "get states"
-        - Need to find a state by name or code for rating configuration
+        - User asks to "list states", "show states", "get states"
+        - Need to find a state by name or code
+        - Setting up state-specific rating configurations
         """
-        try:
-            # Coerce types in case Gemini sends strings or omits args
-            skip_val = int(skip) if skip is not None else 0
-            limit_val = min(int(limit) if limit is not None else 100, 1000)
-            params = {"skip": skip_val, "limit": limit_val}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                params["active"] = active_bool
-            if state_name is not None and str(state_name).strip():
-                params["state_name"] = str(state_name).strip()
-            result = await call_api("GET", "/states/", params=params)
-            return result
-        except (TypeError, ValueError) as e:
-            logger.warning(f"get_states argument error: {e}")
-            return {"error": f"Invalid arguments: {e}", "status_code": 400}
-        except Exception as e:
-            logger.error(f"get_states failed: {e}", exc_info=True)
-            return {"error": str(e), "status_code": 500}
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if state_name:
+            params["state_name"] = state_name
+        return await call_api("GET", "/states/", params=params)
 
 
-    # @mcp.tool()
-    # async def get_state(state_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get detailed information about a specific state by its ID.
-    #     
-    #     Purpose:
-    #     Retrieves complete details for a single US state. Use this when you have
-    #     a state ID and need to verify its details or retrieve its information.
-    #     
-    #     Args:
-    #         state_id: The unique integer ID of the state to retrieve.
-    #         
-    #     Returns:
-    #         State object with fields: id, state_code (2-letter), state_name, active.
-    #         
-    #     When to Use:
-    #     - User provides a state ID and asks for details
-    #     - Need to verify state exists before creating rating configurations
-    #     """
-    #     return await call_api("GET", f"/states/{state_id}")
+    @mcp.tool()
+    async def get_state(state_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific state by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single US state. Use this when you have
+        a state ID and need to verify its details or retrieve its information.
+        
+        Args:
+            state_id: The unique integer ID of the state to retrieve.
+            
+        Returns:
+            State object with fields: id, state_code (2-letter), state_name, active.
+            
+        When to Use:
+        - User provides a state ID and asks for details
+        - Need to verify state exists before creating rating configurations
+        """
+        return await call_api("GET", f"/states/{state_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_state(state_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create state. (Commented out.)"""
-    #     return {"error": "create_state is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_state(state_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Add a new US state to the Ratings API.
+        
+        Purpose:
+        Adds a new US state to the system. States are required for state-specific
+        rating configurations. Typically, you'll add all 50 US states during initial
+        system setup. State codes should follow standard 2-letter USPS codes.
+        
+        Usage Examples:
+        - Create New York: state_data={"state_code": "NY", "state_name": "New York", "active": True}
+        - Create California: state_data={"state_code": "CA", "state_name": "California"}
+        
+        Args:
+            state_data: Dictionary containing:
+                - state_code (str, required): 2-letter USPS state code (e.g., 'NY', 'CA', 'TX')
+                - state_name (str, required): Full name (e.g., 'New York', 'California')
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created state object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create state", "add state", "new state"
+        - Initial system setup to add all US states
+        - Adding territories or new jurisdictions
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - State code should be standard 2-letter USPS code
+        - State code should be unique
+        """
+        return await call_api("POST", "/states/", json=state_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_state(state_id: int, state_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update state. (Commented out.)"""
-    #     return {"error": "update_state is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_state(state_id: int) -> Dict[str, Any]:
-    #     """Delete state. (Commented out.)"""
-    #     return {"error": "delete_state is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_state(state_id: int, state_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing state's details.
+        
+        Purpose:
+        Modifies one or more fields of an existing state. Use this to change state name,
+        update active status, or correct state information.
+        
+        Args:
+            state_id: The unique integer ID of the state to update.
+            state_data: Dictionary containing fields to update:
+                       - state_name: Full name
+                       - state_code: 2-letter code (must be unique)
+                       - active: Boolean status
+            
+        Returns:
+            Updated state object with all fields.
+            
+        When to Use:
+        - User says "update state", "change state", "modify state"
+        - Need to correct state information
+        """
+        return await call_api("PUT", f"/states/{state_id}", json=state_data)
+
+
+    @mcp.tool()
+    async def delete_state(state_id: int) -> Dict[str, Any]:
+        """
+        Remove a state from the system by its ID.
+        
+        Purpose:
+        Permanently removes a state from the system. This is rarely used as states
+        are typically permanent entities. Consider deactivating instead of deleting.
+        
+        Args:
+            state_id: The unique integer ID of the state to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related rating configurations
+        - Consider deactivating (active=False) instead of deleting
+        """
+        return await call_api("DELETE", f"/states/{state_id}")
+
 
     # Contexts endpoints
     @mcp.tool()
@@ -654,7 +1056,7 @@ if MCP_AVAILABLE and mcp is not None:
         context_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List rating contexts (e.g. New Business, Renewal). Use when user asks for contexts or validation rules. Returns items and count.
+        Get a list of rating contexts with full details.
         
         Purpose:
         Retrieves rating contexts from the system. Contexts represent different business
@@ -692,42 +1094,112 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", "/contexts/", params=params)
 
 
-    # @mcp.tool()
-    # async def get_context(context_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get detailed information about a specific context by its ID.
-    #     
-    #     Purpose:
-    #     Retrieves complete details for a single rating context. Use this when you have
-    #     a context ID and need to verify its details or retrieve its information.
-    #     
-    #     Args:
-    #         context_id: The unique integer ID of the context to retrieve.
-    #         
-    #     Returns:
-    #         Context object with fields: id, context_name, active, created_at, updated_at.
-    #         
-    #     When to Use:
-    #     - User provides a context ID and asks for details
-    #     - Need to verify context exists before creating rating configurations
-    #     """
-    #     return await call_api("GET", f"/contexts/{context_id}")
+    @mcp.tool()
+    async def get_context(context_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific context by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single rating context. Use this when you have
+        a context ID and need to verify its details or retrieve its information.
+        
+        Args:
+            context_id: The unique integer ID of the context to retrieve.
+            
+        Returns:
+            Context object with fields: id, context_name, active, created_at, updated_at.
+            
+        When to Use:
+        - User provides a context ID and asks for details
+        - Need to verify context exists before creating rating configurations
+        """
+        return await call_api("GET", f"/contexts/{context_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_context(context_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create context. (Commented out.)"""
-    #     return {"error": "create_context is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_context(context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new rating context.
+        
+        Purpose:
+        Adds a new rating context to the system. Contexts represent different business
+        scenarios for insurance rating. Common contexts include "New Business", "Renewal",
+        "Endorsement", "Cancellation", "Reinstatement", etc. They are used in rating
+        configurations to apply context-specific rating rules and factors.
+        
+        Usage Examples:
+        - Create New Business context: context_data={"context_name": "New Business", "active": True}
+        - Create Renewal context: context_data={"context_name": "Renewal"}
+        - Create Endorsement context: context_data={"context_name": "Endorsement"}
+        
+        Args:
+            context_data: Dictionary containing:
+                - context_name (str, required): Name of the context
+                  Examples: 'New Business', 'Renewal', 'Endorsement', 'Cancellation'
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created context object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create context", "add context", "new context"
+        - Setting up rating contexts for different business scenarios
+        - Adding new transaction types to the system
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - Context name should be descriptive and unique
+        """
+        return await call_api("POST", "/contexts/", json=context_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_context(context_id: int, context_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update context. (Commented out.)"""
-    #     return {"error": "update_context is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_context(context_id: int) -> Dict[str, Any]:
-    #     """Delete context. (Commented out.)"""
-    #     return {"error": "delete_context is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_context(context_id: int, context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing context.
+        
+        Purpose:
+        Modifies one or more fields of an existing context. Use this to change context name
+        or update active status.
+        
+        Args:
+            context_id: The unique integer ID of the context to update.
+            context_data: Dictionary containing fields to update:
+                         - context_name: Name of the context
+                         - active: Boolean status
+            
+        Returns:
+            Updated context object with all fields.
+            
+        When to Use:
+        - User says "update context", "change context", "modify context"
+        - Need to correct context information
+        """
+        return await call_api("PUT", f"/contexts/{context_id}", json=context_data)
+
+
+    @mcp.tool()
+    async def delete_context(context_id: int) -> Dict[str, Any]:
+        """
+        Delete a context by its unique ID.
+        
+        Purpose:
+        Permanently removes a rating context from the system. This is a destructive operation.
+        Consider deactivating the context (update with active=False) instead of deleting.
+        
+        Args:
+            context_id: The unique integer ID of the context to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related rating configurations
+        - Consider deactivating (active=False) instead of deleting
+        """
+        return await call_api("DELETE", f"/contexts/{context_id}")
+
 
     # Rating Tables endpoints
     @mcp.tool()
@@ -745,7 +1217,7 @@ if MCP_AVAILABLE and mcp is not None:
         entity_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        List rating tables (rates, factors, multipliers). Use when user asks for rating tables or to filter by company/LOB/state/product. Returns items and count.
+        Get a list of rating tables with full details.
         
         Purpose:
         Retrieves rating tables from the system. Rating tables store the actual factors,
@@ -773,7 +1245,7 @@ if MCP_AVAILABLE and mcp is not None:
             product_id: Filter by Product ID
             context_id: Filter by Context ID
             entity_id: Filter by legal entity ID
-            
+
         Returns:
             Dictionary with items list and count. Each rating table contains:
             id, table_name, table_type, company_id, lob_id, state_id, product_id,
@@ -785,60 +1257,174 @@ if MCP_AVAILABLE and mcp is not None:
         - Setting up or reviewing rating data
         - Verifying table existence before creating rating plans
         """
-        try:
-            skip_val = int(skip) if skip is not None else 0
-            limit_val = min(int(limit) if limit is not None else 100, 500)
-            params = {"skip": skip_val, "limit": limit_val}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                params["active"] = active_bool
-            if table_name:
-                params["table_name"] = str(table_name).strip()
-            if table_type:
-                params["table_type"] = str(table_type).strip()
-            if company_id is not None:
-                params["company_id"] = int(company_id)
-            if lob_id is not None:
-                params["lob_id"] = int(lob_id)
-            if state_id is not None:
-                params["state_id"] = int(state_id)
-            if product_id is not None:
-                params["product_id"] = int(product_id)
-            if context_id is not None:
-                params["context_id"] = int(context_id)
-            if entity_id is not None:
-                params["entity_id"] = int(entity_id)
-            return await call_api("GET", "/ratingtables/", params=params)
-        except (TypeError, ValueError) as e:
-            logger.warning(f"get_ratingtables argument error: {e}")
-            return {"error": f"Invalid arguments: {e}", "status_code": 400}
-        except Exception as e:
-            logger.error(f"get_ratingtables failed: {e}", exc_info=True)
-            return {"error": str(e), "status_code": 500}
+        # Cap limit to prevent excessive data transfer (rating tables can be large)
+        limit = min(limit, 500)
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if table_name:
+            params["table_name"] = table_name
+        if table_type:
+            params["table_type"] = table_type
+        if company_id is not None:
+            params["company_id"] = company_id
+        if lob_id is not None:
+            params["lob_id"] = lob_id
+        if state_id is not None:
+            params["state_id"] = state_id
+        if product_id is not None:
+            params["product_id"] = product_id
+        if context_id is not None:
+            params["context_id"] = context_id
+        if entity_id is not None:
+            params["entity_id"] = entity_id
+        return await call_api("GET", "/ratingtables/", params=params)
 
 
-    # @mcp.tool()  # disabled
-    # async def get_ratingtable(ratingtable_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get one rating table by ID. Use when you have a ratingtable_id and need full table details.
-    #     """
-    #     return await call_api("GET", f"/ratingtables/{ratingtable_id}")
+    @mcp.tool()
+    async def get_ratingtable(ratingtable_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific rating table by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single rating table. Use this when you have
+        a rating table ID and need to verify its details, check its configuration,
+        or retrieve its information for use in rating plans or calculations.
+        
+        Args:
+            ratingtable_id: The unique integer ID of the rating table to retrieve.
+            
+        Returns:
+            Rating table object with fields: id, table_name, table_type, company_id,
+            lob_id, state_id, product_id, context_id, description, active,
+            created_at, updated_at.
+            
+        When to Use:
+        - User provides a rating table ID and asks for details
+        - Need to verify table exists before creating rating manuals
+        - Displaying table information in responses
+        - Checking table configuration for rating calculations
+        """
+        return await call_api("GET", f"/ratingtables/{ratingtable_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_ratingtable(ratingtable_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create rating table. (Commented out.)"""
-    #     return {"error": "create_ratingtable is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_ratingtable(ratingtable_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new rating table in the Ratings API.
+        
+        Purpose:
+        Adds a new rating table to the system. Rating tables store the actual factors,
+        rates, and multipliers used in premium calculations. They are scoped to specific
+        combinations of Company, LOB, State, Product, and Context. Tables can be of
+        different types (e.g., 'BASE' for base rates, 'LOAD' for load factors,
+        'FACTOR' for rating factors). These tables are referenced by rating algorithms
+        and used in premium calculations.
+        
+        Usage Examples:
+        - Create base rate table: ratingtable_data={"table_name": "Base Rates NY Auto", "table_type": "BASE", "company_id": 1, "lob_id": 1, "state_id": 5, "product_id": 1, "context_id": 1, "description": "Base rates for NY Auto"}
+        - Create load factor table: ratingtable_data={..., "table_type": "LOAD", "table_name": "Load Factors"}
+        - Create rating factor table: ratingtable_data={..., "table_type": "FACTOR", "table_name": "Territory Factors"}
+        
+        Args:
+            ratingtable_data: Dictionary containing:
+                - table_name (str, required): Descriptive name (e.g., 'Base Rates NY Auto')
+                - table_type (str, required): Type of table. Common types:
+                  * 'BASE': Base rates/premiums
+                  * 'LOAD': Load factors/multipliers
+                  * 'FACTOR': Rating factors
+                - company_id (int, required): ID of the company (must exist)
+                - lob_id (int, required): ID of the Line of Business (must exist)
+                - state_id (int, required): ID of the State (must exist)
+                - product_id (int, required): ID of the Product (must exist)
+                - context_id (int, required): ID of the Context (must exist)
+                - description (str, optional): Detailed description of the table's purpose
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created rating table object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create rating table", "add table", "new table"
+        - Setting up rating data for specific company/LOB/state/product/context combinations
+        - Creating lookup tables for rating algorithms
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - All referenced IDs (company, LOB, state, product, context) must exist
+        - Table type should be descriptive and consistent
+        - Tables are typically created before rating manuals and plans
+        """
+        return await call_api("POST", "/ratingtables/", json=ratingtable_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_ratingtable(ratingtable_id: int, ratingtable_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update rating table. (Commented out.)"""
-    #     return {"error": "update_ratingtable is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_ratingtable(ratingtable_id: int) -> Dict[str, Any]:
-    #     """Delete rating table. (Commented out.)"""
-    #     return {"error": "delete_ratingtable is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_ratingtable(ratingtable_id: int, ratingtable_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing rating table.
+        
+        Purpose:
+        Modifies one or more fields of an existing rating table. Use this to change
+        table name, update description, change active status, or correct table information.
+        Note that changing scoping fields (company_id, lob_id, etc.) may affect related
+        rating configurations.
+        
+        Args:
+            ratingtable_id: The unique integer ID of the rating table to update.
+            ratingtable_data: Dictionary containing fields to update:
+                             - table_name: Name of the table
+                             - table_type: Type of table (BASE, LOAD, FACTOR)
+                             - description: Detailed description
+                             - active: Boolean status
+                             - company_id, lob_id, state_id, product_id, context_id:
+                               Scoping fields (use with caution)
+            
+        Returns:
+            Updated rating table object with all fields.
+            
+        When to Use:
+        - User says "update rating table", "change table", "modify table"
+        - Need to correct table information
+        - Activating or deactivating a table
+        - Updating table description
+        
+        Important Notes:
+        - Changing scoping fields may affect related rating configurations
+        - Only provide fields that need updating
+        """
+        return await call_api("PUT", f"/ratingtables/{ratingtable_id}", json=ratingtable_data)
+
+
+    @mcp.tool()
+    async def delete_ratingtable(ratingtable_id: int) -> Dict[str, Any]:
+        """
+        Delete a rating table by its unique ID.
+        
+        Purpose:
+        Permanently removes a rating table from the system. This is a destructive operation.
+        Consider deactivating the table (update with active=False) instead of deleting,
+        as deletion may affect related rating manuals, plans, and calculations.
+        
+        Args:
+            ratingtable_id: The unique integer ID of the rating table to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        When to Use:
+        - User explicitly requests to "delete rating table", "remove table"
+        - Data cleanup operations
+        - Removing obsolete or incorrect tables
+        
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related rating manuals and plans that reference this table
+        - Consider deactivating (active=False) instead of deleting
+        - Always verify table ID and check for dependencies before deletion
+        """
+        return await call_api("DELETE", f"/ratingtables/{ratingtable_id}")
+
 
     # Algorithms endpoints
     @mcp.tool()
@@ -854,7 +1440,7 @@ if MCP_AVAILABLE and mcp is not None:
         entity_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        List rating algorithms (premium calculation logic). Use when user asks for algorithms or premium calculation steps. Returns items and count.
+        Get a list of rating algorithms with full details.
         
         Purpose:
         Retrieves rating algorithms from the system. Algorithms define the calculation
@@ -881,7 +1467,7 @@ if MCP_AVAILABLE and mcp is not None:
             state_id: Filter by State ID
             product_id: Filter by Product ID
             entity_id: Filter by legal entity ID
-            
+
         Returns:
             Dictionary with items list and count. Each algorithm contains:
             id, algorithm_name, company_id, lob_id, state_id, product_id, description,
@@ -893,61 +1479,171 @@ if MCP_AVAILABLE and mcp is not None:
         - Setting up or reviewing rating calculation logic
         - Verifying algorithm exists before creating rating plans
         """
-        try:
-            skip_val = _safe_int(skip, 0) or 0
-            limit_val = min(_safe_int(limit, 100) or 100, 1000)
-            params = {"skip": skip_val, "limit": limit_val}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                params["active"] = active_bool
-            if algorithm_name and str(algorithm_name).strip():
-                params["algorithm_name"] = str(algorithm_name).strip()
-            cid = _safe_int(company_id)
-            if cid is not None:
-                params["company_id"] = cid
-            lid = _safe_int(lob_id)
-            if lid is not None:
-                params["lob_id"] = lid
-            sid = _safe_int(state_id)
-            if sid is not None:
-                params["state_id"] = sid
-            pid = _safe_int(product_id)
-            if pid is not None:
-                params["product_id"] = pid
-            eid = _safe_int(entity_id)
-            if eid is not None:
-                params["entity_id"] = eid
-            return await call_api("GET", "/algorithms/", params=params)
-        except (TypeError, ValueError) as e:
-            logger.warning(f"get_algorithms argument error: {e}")
-            return {"error": f"Invalid arguments: {e}", "status_code": 400}
-        except Exception as e:
-            logger.error(f"get_algorithms failed: {e}", exc_info=True)
-            return {"error": str(e), "status_code": 500}
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if algorithm_name:
+            params["algorithm_name"] = algorithm_name
+        if company_id is not None:
+            params["company_id"] = company_id
+        if lob_id is not None:
+            params["lob_id"] = lob_id
+        if state_id is not None:
+            params["state_id"] = state_id
+        if product_id is not None:
+            params["product_id"] = product_id
+        if entity_id is not None:
+            params["entity_id"] = entity_id
+        return await call_api("GET", "/algorithms/", params=params)
 
 
-    # @mcp.tool()  # disabled
-    # async def get_algorithm(algorithm_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get one algorithm by ID. Use when you have an algorithm_id and need formula or logic details.
-    #     """
-    #     return await call_api("GET", f"/algorithms/{algorithm_id}")
+    @mcp.tool()
+    async def get_algorithm(algorithm_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific algorithm by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single rating algorithm, including its
+        calculation logic. Use this when you have an algorithm ID and need to verify
+        its details, review its logic, or retrieve its information for use in rating plans.
+        
+        Args:
+            algorithm_id: The unique integer ID of the algorithm to retrieve.
+            
+        Returns:
+            Algorithm object with fields: id, algorithm_name, company_id, lob_id,
+            state_id, product_id, description, logic (calculation logic/pseudo-code),
+            active, created_at, updated_at.
+            
+        When to Use:
+        - User provides an algorithm ID and asks for details
+        - Need to review algorithm logic before using in rating plans
+        - Displaying algorithm information in responses
+        - Verifying algorithm configuration
+        """
+        return await call_api("GET", f"/algorithms/{algorithm_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_algorithm(algorithm_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create algorithm. (Commented out.)"""
-    #     return {"error": "create_algorithm is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_algorithm(algorithm_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new rating algorithm.
+        
+        Purpose:
+        Adds a new rating algorithm to the system. Algorithms define the calculation
+        logic and formulas used to compute insurance premiums. They are scoped to
+        specific combinations of Company, LOB, State, and Product. The algorithm's
+        logic field typically contains formulas, pseudo-code, or descriptions of the
+        calculation steps. Algorithms reference rating tables and apply factors to
+        calculate premiums. They are used by rating plans to perform actual premium
+        calculations.
+        
+        Usage Examples:
+        - Create standard premium algorithm: algorithm_data={"algorithm_name": "Standard Premium Calc", "company_id": 1, "lob_id": 1, "state_id": 5, "product_id": 1, "description": "Standard premium calculation", "logic": "base_rate * territory_factor * age_factor"}
+        - Create with detailed logic: algorithm_data={..., "logic": "Step 1: Get base rate from table. Step 2: Apply territory factor. Step 3: Apply age factor. Step 4: Apply discounts."}
+        
+        Args:
+            algorithm_data: Dictionary containing:
+                - algorithm_name (str, required): Descriptive name (e.g., 'Standard Premium Calculation')
+                - company_id (int, required): ID of the company (must exist)
+                - lob_id (int, required): ID of the Line of Business (must exist)
+                - state_id (int, required): ID of the State (must exist)
+                - product_id (int, required): ID of the Product (must exist)
+                - description (str, optional): Description of what the algorithm does
+                - logic (str, optional): Calculation logic, formula, or pseudo-code.
+                  Can reference rating tables, factors, and use mathematical expressions.
+                  Example: "base_rate * state_factor * hazard_factor"
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created algorithm object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create algorithm", "add algorithm", "new algorithm"
+        - Setting up rating calculation logic for specific configurations
+        - Defining premium calculation formulas
+        - Creating algorithms before rating plans
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - All referenced IDs (company, LOB, state, product) must exist
+        - Logic can reference variables, tables, and use mathematical expressions
+        - Algorithms are typically created before rating plans
+        - Consider using evaluate_expression tool to test algorithm logic
+        """
+        return await call_api("POST", "/algorithms/", json=algorithm_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_algorithm(algorithm_id: int, algorithm_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update algorithm. (Commented out.)"""
-    #     return {"error": "update_algorithm is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_algorithm(algorithm_id: int) -> Dict[str, Any]:
-    #     """Delete algorithm. (Commented out.)"""
-    #     return {"error": "delete_algorithm is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_algorithm(algorithm_id: int, algorithm_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing algorithm.
+        
+        Purpose:
+        Modifies one or more fields of an existing algorithm. Use this to change
+        algorithm name, update calculation logic, modify description, change active
+        status, or correct algorithm information. Note that changing scoping fields
+        (company_id, lob_id, etc.) may affect related rating plans.
+        
+        Args:
+            algorithm_id: The unique integer ID of the algorithm to update.
+            algorithm_data: Dictionary containing fields to update:
+                           - algorithm_name: Name of the algorithm
+                           - description: Description of what the algorithm does
+                           - logic: Calculation logic, formula, or pseudo-code
+                           - active: Boolean status
+                           - company_id, lob_id, state_id, product_id:
+                             Scoping fields (use with caution)
+            
+        Returns:
+            Updated algorithm object with all fields.
+            
+        When to Use:
+        - User says "update algorithm", "change algorithm", "modify algorithm"
+        - Need to correct algorithm information or update calculation logic
+        - Activating or deactivating an algorithm
+        - Refining algorithm formulas
+        
+        Important Notes:
+        - Changing scoping fields may affect related rating plans
+        - Updating logic may change premium calculation results
+        - Only provide fields that need updating
+        - Test updated logic before activating
+        """
+        return await call_api("PUT", f"/algorithms/{algorithm_id}", json=algorithm_data)
+
+
+    @mcp.tool()
+    async def delete_algorithm(algorithm_id: int) -> Dict[str, Any]:
+        """
+        Delete an algorithm by its unique ID.
+        
+        Purpose:
+        Permanently removes a rating algorithm from the system. This is a destructive
+        operation. Consider deactivating the algorithm (update with active=False)
+        instead of deleting, as deletion may affect related rating plans that use
+        this algorithm.
+        
+        Args:
+            algorithm_id: The unique integer ID of the algorithm to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        When to Use:
+        - User explicitly requests to "delete algorithm", "remove algorithm"
+        - Data cleanup operations
+        - Removing obsolete or incorrect algorithms
+        
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related rating plans that reference this algorithm
+        - Consider deactivating (active=False) instead of deleting
+        - Always verify algorithm ID and check for dependencies before deletion
+        """
+        return await call_api("DELETE", f"/algorithms/{algorithm_id}")
+
 
     # Rating Manuals endpoints
     @mcp.tool()
@@ -961,11 +1657,11 @@ if MCP_AVAILABLE and mcp is not None:
         state_id: Optional[int] = None,
         product_id: Optional[int] = None,
         ratingtable_id: Optional[int] = None,
-        entity_id: Optional[int] = None,
-        effective_date: Optional[str] = None
+        effective_date: Optional[str] = None,
+        entity_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        List rating manuals. Use when user asks for manuals or rating data by company/LOB/state/product. Returns items and count.
+        Get a list of rating manuals with full details.
         
         Purpose:
         Retrieves rating manuals from the system. Rating manuals are collections of
@@ -993,10 +1689,10 @@ if MCP_AVAILABLE and mcp is not None:
             state_id: Filter by State ID
             product_id: Filter by Product ID
             ratingtable_id: Filter by rating table ID (manuals that reference this table)
-            entity_id: Filter by legal entity ID
             effective_date: Optional filter by effective date (YYYY-MM-DD format).
                           Returns manuals effective on or before this date.
-            
+            entity_id: Filter by legal entity ID
+
         Returns:
             Dictionary with items list and count. Each rating manual contains:
             id, manual_name, company_id, lob_id, state_id, product_id, ratingtable_id,
@@ -1009,42 +1705,35 @@ if MCP_AVAILABLE and mcp is not None:
         - Finding current or historical rating manuals
         - Verifying manual existence before creating rating plans
         """
-        try:
-            skip_val = int(skip) if skip is not None else 0
-            limit_val = min(int(limit) if limit is not None else 100, 500)
-            params = {"skip": skip_val, "limit": limit_val}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                params["active"] = active_bool
-            if manual_name:
-                params["manual_name"] = str(manual_name).strip()
-            if company_id is not None:
-                params["company_id"] = int(company_id)
-            if lob_id is not None:
-                params["lob_id"] = int(lob_id)
-            if state_id is not None:
-                params["state_id"] = int(state_id)
-            if product_id is not None:
-                params["product_id"] = int(product_id)
-            if ratingtable_id is not None:
-                params["ratingtable_id"] = int(ratingtable_id)
-            if entity_id is not None:
-                params["entity_id"] = int(entity_id)
-            if effective_date:
-                params["effective_date"] = str(effective_date).strip()
-            return await call_api("GET", "/ratingmanuals/", params=params)
-        except (TypeError, ValueError) as e:
-            logger.warning(f"get_ratingmanuals argument error: {e}")
-            return {"error": f"Invalid arguments: {e}", "status_code": 400}
-        except Exception as e:
-            logger.error(f"get_ratingmanuals failed: {e}", exc_info=True)
-            return {"error": str(e), "status_code": 500}
+        # Cap limit to prevent excessive data transfer
+        limit = min(limit, 500)
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if manual_name:
+            params["manual_name"] = manual_name
+        if company_id is not None:
+            params["company_id"] = company_id
+        if lob_id is not None:
+            params["lob_id"] = lob_id
+        if state_id is not None:
+            params["state_id"] = state_id
+        if product_id is not None:
+            params["product_id"] = product_id
+        if ratingtable_id is not None:
+            params["ratingtable_id"] = ratingtable_id
+        if effective_date:
+            params["effective_date"] = effective_date
+        if entity_id is not None:
+            params["entity_id"] = entity_id
+        return await call_api("GET", "/ratingmanuals/", params=params)
 
 
     @mcp.tool()
     async def get_ratingmanual(ratingmanual_id: int) -> Dict[str, Any]:
         """
-        Get one rating manual by ID. Use when you have a ratingmanual_id and need manual details.
+        Get detailed information about a specific rating manual by its ID.
         
         Purpose:
         Retrieves complete details for a single rating manual, including its effective
@@ -1069,20 +1758,125 @@ if MCP_AVAILABLE and mcp is not None:
         return await call_api("GET", f"/ratingmanuals/{ratingmanual_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_ratingmanual(ratingmanual_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create rating manual. (Commented out.)"""
-    #     return {"error": "create_ratingmanual is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_ratingmanual(ratingmanual_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new rating manual.
+        
+        Purpose:
+        Adds a new rating manual to the system. Rating manuals are collections of
+        rating tables and configurations organized for specific Company/LOB/State/Product
+        combinations. They serve as the authoritative source of rating data and are
+        versioned with effective and expiration dates. Manuals reference a primary
+        rating table and organize rating data for specific jurisdictions and products.
+        They are used to manage different versions of rating data over time.
+        
+        Usage Examples:
+        - Create manual for NY Auto: ratingmanual_data={"manual_name": "NY Auto Manual 2024", "company_id": 1, "lob_id": 1, "state_id": 5, "product_id": 1, "ratingtable_id": 10, "effective_date": "2024-01-01", "active": True}
+        - Create with expiration: ratingmanual_data={..., "expiration_date": "2024-12-31"}
+        - Create future-dated manual: ratingmanual_data={..., "effective_date": "2025-01-01"}
+        
+        Args:
+            ratingmanual_data: Dictionary containing:
+                - manual_name (str, required): Descriptive name (e.g., 'NY Auto Manual 2024')
+                - company_id (int, required): ID of the company (must exist)
+                - lob_id (int, required): ID of the Line of Business (must exist)
+                - state_id (int, required): ID of the State (must exist)
+                - product_id (int, required): ID of the Product (must exist)
+                - ratingtable_id (int, required): ID of the primary rating table (must exist)
+                - effective_date (str, required): Date when manual becomes active (YYYY-MM-DD format)
+                - expiration_date (str, optional): Date when manual expires (YYYY-MM-DD format).
+                                                If not provided, manual has no expiration.
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created rating manual object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create rating manual", "add manual", "new manual"
+        - Setting up rating data organization for specific configurations
+        - Creating versioned rating data (e.g., annual updates)
+        - Organizing rating tables into manuals
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - All referenced IDs (company, LOB, state, product, ratingtable) must exist
+        - Effective date should be in YYYY-MM-DD format
+        - Manuals are typically created after rating tables
+        - Use expiration_date to manage manual versions over time
+        """
+        return await call_api("POST", "/ratingmanuals/", json=ratingmanual_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_ratingmanual(ratingmanual_id: int, ratingmanual_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update rating manual. (Commented out.)"""
-    #     return {"error": "update_ratingmanual is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_ratingmanual(ratingmanual_id: int) -> Dict[str, Any]:
-    #     """Delete rating manual. (Commented out.)"""
-    #     return {"error": "delete_ratingmanual is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_ratingmanual(ratingmanual_id: int, ratingmanual_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing rating manual.
+        
+        Purpose:
+        Modifies one or more fields of an existing rating manual. Use this to change
+        manual name, update effective/expiration dates, change active status, update
+        rating table reference, or correct manual information. Note that changing
+        scoping fields (company_id, lob_id, etc.) may affect related rating plans.
+        
+        Args:
+            ratingmanual_id: The unique integer ID of the rating manual to update.
+            ratingmanual_data: Dictionary containing fields to update:
+                              - manual_name: Name of the manual
+                              - ratingtable_id: Primary rating table ID (must exist)
+                              - effective_date: Effective date (YYYY-MM-DD)
+                              - expiration_date: Expiration date (YYYY-MM-DD)
+                              - active: Boolean status
+                              - company_id, lob_id, state_id, product_id:
+                                Scoping fields (use with caution)
+            
+        Returns:
+            Updated rating manual object with all fields.
+            
+        When to Use:
+        - User says "update rating manual", "change manual", "modify manual"
+        - Need to correct manual information or update dates
+        - Extending expiration dates
+        - Activating or deactivating a manual
+        
+        Important Notes:
+        - Changing scoping fields may affect related rating plans
+        - Updating effective/expiration dates may change which manual is current
+        - Only provide fields that need updating
+        - Date format must be YYYY-MM-DD
+        """
+        return await call_api("PUT", f"/ratingmanuals/{ratingmanual_id}", json=ratingmanual_data)
+
+
+    @mcp.tool()
+    async def delete_ratingmanual(ratingmanual_id: int) -> Dict[str, Any]:
+        """
+        Delete a rating manual by its unique ID.
+        
+        Purpose:
+        Permanently removes a rating manual from the system. This is a destructive
+        operation. Consider deactivating the manual (update with active=False) instead
+        of deleting, as deletion may affect related rating plans that reference this manual.
+        
+        Args:
+            ratingmanual_id: The unique integer ID of the rating manual to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        When to Use:
+        - User explicitly requests to "delete rating manual", "remove manual"
+        - Data cleanup operations
+        - Removing obsolete or incorrect manuals
+        
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect related rating plans that reference this manual
+        - Consider deactivating (active=False) instead of deleting
+        - Always verify manual ID and check for dependencies before deletion
+        """
+        return await call_api("DELETE", f"/ratingmanuals/{ratingmanual_id}")
+
 
     # Rating Plans endpoints
     @mcp.tool()
@@ -1096,11 +1890,11 @@ if MCP_AVAILABLE and mcp is not None:
         state_id: Optional[int] = None,
         product_id: Optional[int] = None,
         algorithm_id: Optional[int] = None,
-        entity_id: Optional[int] = None,
-        effective_date: Optional[str] = None
+        effective_date: Optional[str] = None,
+        entity_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        List rating plans. Use when user asks for rating plans or active plans. Returns items and count.
+        Get a list of rating plans with full details.
         
         Purpose:
         Retrieves rating plans from the system. Rating plans are the top-level
@@ -1128,10 +1922,10 @@ if MCP_AVAILABLE and mcp is not None:
             state_id: Filter by State ID
             product_id: Filter by Product ID
             algorithm_id: Filter by algorithm ID (plans that use this algorithm)
-            entity_id: Filter by legal entity ID
             effective_date: Optional filter by effective date (YYYY-MM-DD format).
                           Returns plans effective on or before this date.
-            
+            entity_id: Filter by legal entity ID
+
         Returns:
             Dictionary with items list and count. Each rating plan contains:
             id, plan_name, company_id, lob_id, state_id, product_id, algorithm_id,
@@ -1144,109 +1938,191 @@ if MCP_AVAILABLE and mcp is not None:
         - Finding current or historical rating plans
         - Verifying plan existence for premium calculations
         """
-        try:
-            # Log request (incoming args)
-            logger.info(
-                "get_ratingplans request: skip=%s, limit=%s, active=%s, plan_name=%s, company_id=%s, lob_id=%s, state_id=%s, product_id=%s, algorithm_id=%s, effective_date=%s",
-                skip, limit, active, plan_name, company_id, lob_id, state_id, product_id, algorithm_id, effective_date,
-            )
-            skip_val = _safe_int(skip, 0) or 0
-            limit_val = min(_safe_int(limit, 100) or 100, 500)
-            params = {"skip": skip_val, "limit": limit_val}
-            active_bool = normalize_bool(active)
-            if active_bool is not None:
-                params["active"] = active_bool
-            if plan_name and str(plan_name).strip():
-                params["plan_name"] = str(plan_name).strip()
-            cid = _safe_int(company_id)
-            if cid is not None:
-                params["company_id"] = cid
-            lid = _safe_int(lob_id)
-            if lid is not None:
-                params["lob_id"] = lid
-            sid = _safe_int(state_id)
-            if sid is not None:
-                params["state_id"] = sid
-            pid = _safe_int(product_id)
-            if pid is not None:
-                params["product_id"] = pid
-            aid = _safe_int(algorithm_id)
-            if aid is not None:
-                params["algorithm_id"] = aid
-            eid = _safe_int(entity_id)
-            if eid is not None:
-                params["entity_id"] = eid
-            if effective_date and str(effective_date).strip():
-                params["effective_date"] = str(effective_date).strip()
-            logger.info("get_ratingplans request params (resolved): %s", params)
-
-            # Prefer direct service call when MCP runs in same process (avoids HTTP localhost/auth/timeout)
-            result = None
-            if _ratingplan_service is not None:
-                try:
-                    filter_by = {k: v for k, v in params.items() if k not in ("skip", "limit")}
-                    plans = await _ratingplan_service.get_ratingplans(
-                        skip=params["skip"],
-                        limit=params["limit"],
-                        filter_by=filter_by if filter_by else None,
-                    )
-                    items = [p.model_dump() if hasattr(p, "model_dump") else (p.dict() if hasattr(p, "dict") else p) for p in plans]
-                    result = {"items": items, "count": len(items)}
-                except Exception as e:
-                    logger.warning("get_ratingplans direct service call failed, falling back to HTTP: %s", e)
-                    result = None
-            if result is None:
-                result = await call_api("GET", "/ratingplans/", params=params)
-
-            # Log response
-            if isinstance(result, dict) and "error" in result:
-                logger.warning(
-                    "get_ratingplans response (error): %s (status_code=%s)",
-                    result.get("error"),
-                    result.get("status_code"),
-                )
-            else:
-                items = result.get("items", []) if isinstance(result, dict) else []
-                count = result.get("count", len(items)) if isinstance(result, dict) else 0
-                logger.info("get_ratingplans response: count=%s, items_len=%s", count, len(items) if isinstance(items, list) else "n/a")
-                logger.debug("get_ratingplans response full: %s", result)
-            return result
-        except (TypeError, ValueError) as e:
-            logger.warning(f"get_ratingplans argument error: {e}")
-            return {"error": f"Invalid arguments: {e}", "status_code": 400}
-        except Exception as e:
-            logger.error(f"get_ratingplans failed: {e}", exc_info=True)
-            return {"error": str(e), "status_code": 500}
+        # Cap limit to prevent excessive data transfer
+        limit = min(limit, 500)
+        params = {"skip": skip, "limit": limit}
+        active_bool = normalize_bool(active)
+        if active_bool is not None:
+            params["active"] = active_bool
+        if plan_name:
+            params["plan_name"] = plan_name
+        if company_id is not None:
+            params["company_id"] = company_id
+        if lob_id is not None:
+            params["lob_id"] = lob_id
+        if state_id is not None:
+            params["state_id"] = state_id
+        if product_id is not None:
+            params["product_id"] = product_id
+        if algorithm_id is not None:
+            params["algorithm_id"] = algorithm_id
+        if effective_date:
+            params["effective_date"] = effective_date
+        if entity_id is not None:
+            params["entity_id"] = entity_id
+        return await call_api("GET", "/ratingplans/", params=params)
 
 
-    # @mcp.tool()  # disabled
-    # async def get_ratingplan(ratingplan_id: int) -> Dict[str, Any]:
-    #     """
-    #     Get one rating plan by ID. Use when you have a ratingplan_id and need plan details.
-    #     """
-    #     return await call_api("GET", f"/ratingplans/{ratingplan_id}")
+    @mcp.tool()
+    async def get_ratingplan(ratingplan_id: int) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific rating plan by its ID.
+        
+        Purpose:
+        Retrieves complete details for a single rating plan, including its effective
+        dates and associated algorithm. Use this when you have a rating plan ID and
+        need to verify its details, check its effective dates, or retrieve its
+        information for premium calculations.
+        
+        Args:
+            ratingplan_id: The unique integer ID of the rating plan to retrieve.
+            
+        Returns:
+            Rating plan object with fields: id, plan_name, company_id, lob_id,
+            state_id, product_id, algorithm_id, effective_date, expiration_date,
+            active, created_at, updated_at.
+            
+        When to Use:
+        - User provides a rating plan ID and asks for details
+        - Need to verify plan exists and check effective dates
+        - Displaying plan information in responses
+        - Verifying plan configuration before premium calculations
+        """
+        return await call_api("GET", f"/ratingplans/{ratingplan_id}")
 
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def create_ratingplan(ratingplan_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Create rating plan. (Commented out.)"""
-    #     return {"error": "create_ratingplan is disabled", "status_code": 403}
+    @mcp.tool()
+    async def create_ratingplan(ratingplan_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new rating plan.
+        
+        Purpose:
+        Adds a new rating plan to the system. Rating plans are the top-level
+        configuration that ties together all rating components (Company, LOB, State,
+        Product, Algorithm) to create a complete rating solution. Plans are versioned
+        with effective and expiration dates and reference algorithms that perform the
+        actual premium calculations. They represent the complete rating configuration
+        for a specific jurisdiction and product. Plans are the final piece needed to
+        perform premium calculations.
+        
+        Usage Examples:
+        - Create plan for NY Auto: ratingplan_data={"plan_name": "NY Auto Plan 2024", "company_id": 1, "lob_id": 1, "state_id": 5, "product_id": 1, "algorithm_id": 10, "effective_date": "2024-01-01", "active": True}
+        - Create with expiration: ratingplan_data={..., "expiration_date": "2024-12-31"}
+        - Create future-dated plan: ratingplan_data={..., "effective_date": "2025-01-01"}
+        
+        Args:
+            ratingplan_data: Dictionary containing:
+                - plan_name (str, required): Descriptive name (e.g., 'NY Auto Plan 2024')
+                - company_id (int, required): ID of the company (must exist)
+                - lob_id (int, required): ID of the Line of Business (must exist)
+                - state_id (int, required): ID of the State (must exist)
+                - product_id (int, required): ID of the Product (must exist)
+                - algorithm_id (int, required): ID of the algorithm to use (must exist)
+                - effective_date (str, required): Date when plan becomes active (YYYY-MM-DD format)
+                - expiration_date (str, optional): Date when plan expires (YYYY-MM-DD format).
+                                                If not provided, plan has no expiration.
+                - active (bool, optional): Initial active status (defaults to True)
+                
+        Returns:
+            Created rating plan object with all fields including auto-generated 'id'.
+            
+        When to Use:
+        - User says "create rating plan", "add plan", "new plan"
+        - Setting up complete rating solutions for specific configurations
+        - Creating versioned rating plans (e.g., annual updates)
+        - Finalizing rating configuration after creating all components
+        
+        Important Notes:
+        - The 'id' is automatically generated
+        - All referenced IDs (company, LOB, state, product, algorithm) must exist
+        - Algorithm must be created before the plan
+        - Effective date should be in YYYY-MM-DD format
+        - Plans are typically created after all other components (tables, algorithms, manuals)
+        - Use expiration_date to manage plan versions over time
+        - A plan is required to perform premium calculations
+        """
+        return await call_api("POST", "/ratingplans/", json=ratingplan_data)
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def update_ratingplan(ratingplan_id: int, ratingplan_data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Update rating plan. (Commented out.)"""
-    #     return {"error": "update_ratingplan is disabled", "status_code": 403}
 
-    # @mcp.tool()  # create/update/delete disabled
-    # async def delete_ratingplan(ratingplan_id: int) -> Dict[str, Any]:
-    #     """Delete rating plan. (Commented out.)"""
-    #     return {"error": "delete_ratingplan is disabled", "status_code": 403}
+    @mcp.tool()
+    async def update_ratingplan(ratingplan_id: int, ratingplan_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing rating plan.
+        
+        Purpose:
+        Modifies one or more fields of an existing rating plan. Use this to change
+        plan name, update effective/expiration dates, change active status, update
+        algorithm reference, or correct plan information. Note that changing scoping
+        fields (company_id, lob_id, etc.) or algorithm_id may significantly affect
+        premium calculations.
+        
+        Args:
+            ratingplan_id: The unique integer ID of the rating plan to update.
+            ratingplan_data: Dictionary containing fields to update:
+                            - plan_name: Name of the plan
+                            - algorithm_id: Algorithm ID (must exist, use with caution)
+                            - effective_date: Effective date (YYYY-MM-DD)
+                            - expiration_date: Expiration date (YYYY-MM-DD)
+                            - active: Boolean status
+                            - company_id, lob_id, state_id, product_id:
+                              Scoping fields (use with extreme caution)
+            
+        Returns:
+            Updated rating plan object with all fields.
+            
+        When to Use:
+        - User says "update rating plan", "change plan", "modify plan"
+        - Need to correct plan information or update dates
+        - Extending expiration dates
+        - Activating or deactivating a plan
+        - Updating algorithm reference (rare, may affect calculations)
+        
+        Important Notes:
+        - Changing scoping fields or algorithm_id may significantly affect premium calculations
+        - Updating effective/expiration dates may change which plan is current
+        - Only provide fields that need updating
+        - Date format must be YYYY-MM-DD
+        - Test plan after updating algorithm_id
+        """
+        return await call_api("PUT", f"/ratingplans/{ratingplan_id}", json=ratingplan_data)
+
+
+    @mcp.tool()
+    async def delete_ratingplan(ratingplan_id: int) -> Dict[str, Any]:
+        """
+        Delete a rating plan by its unique ID.
+        
+        Purpose:
+        Permanently removes a rating plan from the system. This is a destructive
+        operation. Consider deactivating the plan (update with active=False) instead
+        of deleting, as deletion may affect premium calculations and historical data.
+        
+        Args:
+            ratingplan_id: The unique integer ID of the rating plan to delete.
+            
+        Returns:
+            Dictionary with success message and deleted flag, or error if not found.
+            
+        When to Use:
+        - User explicitly requests to "delete rating plan", "remove plan"
+        - Data cleanup operations
+        - Removing obsolete or incorrect plans
+        
+        Warning:
+        - This action is PERMANENT and CANNOT be undone
+        - May affect premium calculations and historical data
+        - Consider deactivating (active=False) instead of deleting
+        - Always verify plan ID and check for dependencies before deletion
+        - Deletion may impact active rating operations
+        """
+        return await call_api("DELETE", f"/ratingplans/{ratingplan_id}")
+
 
     # Health check
     @mcp.tool()
     async def health_check() -> Dict[str, Any]:
         """
-        Check if the API and database are up. Use when user asks about system health or status. Returns status and database connection.
+        Check the connectivity and operational status of the Ratings API and its MongoDB database.
         
         Purpose:
         Verifies that the Ratings API service and its MongoDB database are operational.
@@ -1275,18 +2151,7 @@ if MCP_AVAILABLE and mcp is not None:
         - Checks both API service and MongoDB database connectivity
         - Useful for automated monitoring and alerting
         """
-        # Health is at root /health, not under /api/v1; request full URL so base_url is not used
-        try:
-            response = await client.request("GET", f"{api_url.rstrip('/')}/health")
-            response.raise_for_status()
-            data = response.json()
-            return data if isinstance(data, dict) else {"data": data}
-        except httpx.HTTPStatusError as e:
-            logger.warning(f"Health check returned status {e.response.status_code}")
-            return {"error": str(e), "status_code": e.response.status_code}
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            return {"error": str(e), "status_code": None}
+        return await call_api("GET", "/health")
 
     @mcp.tool()
     async def evaluate_expression(
@@ -1294,7 +2159,7 @@ if MCP_AVAILABLE and mcp is not None:
         variables: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Evaluate a math expression with variables (e.g. for premium). Use when you need to compute a formula. Pass expression (string) and variables (dict).
+        Evaluate a mathematical expression using variables provided in the payload.
         
         Purpose:
         This tool evaluates mathematical formulas and expressions commonly used in insurance
@@ -1354,7 +2219,7 @@ if MCP_AVAILABLE and mcp is not None:
         """
         try:
             logger.info(f"MCP tool: Evaluating expression '{expression}' with variables {variables}")
-            result = evaluate_expression_service.evaluate(expression, variables)
+            result = _eval_service.evaluate(expression, variables)
             return {
                 "result": result,
                 "expression": expression,
@@ -1378,20 +2243,937 @@ if MCP_AVAILABLE and mcp is not None:
                 "status": "error"
             }
 
+    # -------------------------------------------------------------------------
+    # Excel-to-Configuration Agent Tools
+    # -------------------------------------------------------------------------
+
+    @mcp.tool()
+    async def analyze_excel_bundle(bundle_id: str) -> Dict[str, Any]:
+        """
+        Analyze a parsed Excel bundle that was uploaded via POST /api/v1/agent/upload-excel.
+
+        Use this tool immediately after a user message contains [bundle_id:<id>].
+
+        IMPORTANT WORKFLOW:
+        1. Call this tool to get raw table data (headers + sample rows).
+        2. Inspect the headers and sample_rows for each table to determine its semantic type.
+        3. Call apply_table_classifications with your interpretation of each table's type,
+           variable name, input/output columns, and your inferred formula.
+        4. Then proceed with resolve_reference_data → preview_configuration → create_* tools.
+
+        Table classification guide (use these exact type strings):
+          "base_rate_table"    – has a base rate or base premium output column
+          "factor_table"       – categorical string input(s) → one numeric factor output
+          "range_factor_table" – numeric range inputs (e.g. AGE_MIN/AGE_MAX or FROM/TO) → one numeric factor
+          "decision_matrix"    – two-dimensional lookup where output depends on row AND column key
+          "lookup_table"       – any other tabular structure
+
+        For variable_name: use the output column name if it is already UPPER_SNAKE_CASE
+        (e.g. STATE_FACTOR, AGE_FACTOR, BASE_RATE); otherwise derive from the sheet/section name.
+
+        Args:
+            bundle_id: The bundle ID returned by the upload endpoint.
+
+        Returns:
+            tables: list of {section_name, headers, sample_rows, row_count,
+                             suggested_variable_name, suggested_output_column, suggested_input_columns}
+            formula_detected: explicit formula from Config sheet (or null)
+            formula_confidence: 1.0 if explicit, 0.0 otherwise
+            parameters_detected: key/value metadata found in the sheet
+            missing_context: list of field names the user must still provide
+        """
+        try:
+            from app.services import agent_session
+            bundle = agent_session.get_bundle(bundle_id)
+            if bundle is None:
+                return {"error": f"Bundle '{bundle_id}' not found. Ask the user to re-upload the file.", "status_code": 404}
+
+            tables = bundle.get("tables", [])
+            table_info = [
+                {
+                    "section_name": t.get("section_name"),
+                    "headers": t.get("headers", []),
+                    # Include up to 5 sample rows so you can inspect the data shape
+                    "sample_rows": t.get("rows", [])[:5],
+                    "row_count": t.get("row_count", 0),
+                    # Python's initial guesses — override these in apply_table_classifications
+                    "suggested_variable_name": t.get("variable_name"),
+                    "suggested_output_column": t.get("output_column"),
+                    "suggested_input_columns": t.get("input_columns", []),
+                }
+                for t in tables
+            ]
+
+            params = bundle.get("parameters", {}) or {}
+            missing = []
+            for field_name in ("company", "lob", "state", "product", "entity", "effective_date"):
+                key = field_name.replace("_", " ") if "_" in field_name else field_name
+                if not params.get(field_name) and not params.get(key):
+                    missing.append(field_name)
+
+            is_prebuilt = bool(bundle.get("is_prebuilt"))
+            next_step = (
+                "This bundle was already fully parsed and validated by a specialized template parser "
+                "(tables, formula, and calculation steps are complete and locked in) — you do NOT need to "
+                "call apply_table_classifications. Skip directly to resolve_reference_data, then "
+                "preview_configuration."
+                if is_prebuilt else
+                "Call apply_table_classifications with your classification of each table and the inferred formula."
+            )
+
+            return {
+                "bundle_id": bundle_id,
+                "tables": table_info,
+                "formula_detected": bundle.get("formula_detected"),
+                "formula_confidence": bundle.get("formula_confidence", 0.0),
+                "parameters_detected": params,
+                "missing_context": missing,
+                "is_prebuilt": is_prebuilt,
+                "next_step": next_step,
+            }
+        except Exception as e:
+            logger.error("analyze_excel_bundle failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def apply_table_classifications(
+        bundle_id: str,
+        classifications: List[Dict[str, Any]],
+        formula: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Store your semantic classification of each table back into the bundle session.
+
+        Call this AFTER analyze_excel_bundle and BEFORE preview_configuration.
+        All downstream tools (create_rating_tables_from_bundle, infer_algorithm, etc.)
+        read their table metadata from the bundle session, so you MUST call this tool
+        to record your interpretation before proceeding.
+
+        Args:
+            bundle_id: The bundle ID from analyze_excel_bundle.
+            classifications: One dict per table (must cover all tables in the bundle):
+                {
+                    "section_name":   str,        # must match section_name from analyze_excel_bundle
+                    "table_type":     str,        # base_rate_table | factor_table | range_factor_table
+                                                  #   | decision_matrix | lookup_table
+                    "variable_name":  str,        # UPPER_SNAKE_CASE name used in formula (e.g. AGE_FACTOR)
+                    "input_columns":  list[str],  # column(s) used as lookup key(s)
+                    "output_column":  str,        # column containing the factor/rate value
+                }
+            formula: The inferred formula expression (e.g. "BASE_RATE * STATE_FACTOR * CREDIT_FACTOR").
+                     If the config sheet already provided an explicit formula, passing null here keeps it.
+
+        Returns:
+            updated_tables: the classification as stored (for verification)
+            formula_stored: the formula that will be used by infer_algorithm
+        """
+        try:
+            from app.services import agent_session
+
+            bundle = agent_session.get_bundle(bundle_id)
+            if bundle is None:
+                return {"error": f"Bundle '{bundle_id}' not found.", "status_code": 404}
+
+            # Build a lookup from section_name → classification
+            class_map = {c["section_name"]: c for c in classifications if "section_name" in c}
+
+            # Update each table in the bundle with Gemini's classification
+            tables = bundle.get("tables", [])
+            for t in tables:
+                name = t.get("section_name", "")
+                cls = class_map.get(name)
+                if cls:
+                    t["table_type"] = cls.get("table_type", t.get("table_type", "lookup_table"))
+                    t["variable_name"] = cls.get("variable_name", t.get("variable_name", ""))
+                    t["input_columns"] = cls.get("input_columns", t.get("input_columns", []))
+                    t["output_column"] = cls.get("output_column", t.get("output_column", ""))
+
+            updates: Dict[str, Any] = {"tables": tables}
+            if formula is not None:
+                updates["suggested_formula"] = formula
+                updates["formula_confidence"] = 0.9
+                updates["inference_method"] = "gemini"
+            elif not bundle.get("suggested_formula"):
+                # No explicit formula from config sheet and Gemini didn't provide one
+                updates["suggested_formula"] = ""
+
+            agent_session.update_bundle(bundle_id, updates)
+            logger.info(
+                "apply_table_classifications bundle=%s tables=%d formula=%r",
+                bundle_id, len(classifications), formula,
+            )
+
+            stored_formula = formula if formula is not None else bundle.get("formula_detected") or bundle.get("suggested_formula") or ""
+            return {
+                "bundle_id": bundle_id,
+                "updated_tables": [
+                    {
+                        "section_name": t.get("section_name"),
+                        "table_type": t.get("table_type"),
+                        "variable_name": t.get("variable_name"),
+                        "input_columns": t.get("input_columns"),
+                        "output_column": t.get("output_column"),
+                    }
+                    for t in tables
+                ],
+                "formula_stored": stored_formula,
+            }
+        except Exception as e:
+            logger.error("apply_table_classifications failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def resolve_reference_data(
+        company_name: Optional[str] = None,
+        lob_name: Optional[str] = None,
+        state_name: Optional[str] = None,
+        product_name: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        effective_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fuzzy-match user-provided names to database IDs for company, LOB, state, product, and legal entity.
+
+        Call this after collecting context from the user (or from bundle parameters).
+        Pass whatever names you have; unrecognised names are returned with id=null and a suggestion list.
+
+        Args:
+            company_name: Company name as provided by the user.
+            lob_name: Line-of-business name.
+            state_name: State name or code.
+            product_name: Product name.
+            entity_name: Legal entity name.
+            effective_date: ISO date string (YYYY-MM-DD), passed through unchanged.
+
+        Returns:
+            resolved: dict with company_id, lob_id, state_id, product_id, entity_id (int or null)
+            unresolved: list of field names that could not be matched
+            suggestions: dict of field_name → list of {id, name} candidates
+        """
+        try:
+            import difflib
+
+            resolved: Dict[str, Any] = {
+                "company_id": None, "lob_id": None, "state_id": None,
+                "product_id": None, "entity_id": None, "effective_date": effective_date,
+            }
+            unresolved: List[str] = []
+            suggestions: Dict[str, Any] = {}
+
+            async def _fuzzy_match(name: str, endpoint: str, name_field: str, id_field: str = "id") -> Tuple[Optional[int], List[Dict]]:
+                if not name:
+                    return None, []
+                result = await call_api("GET", endpoint, params={"limit": 500})
+                items = result.get("items", []) if isinstance(result, dict) else []
+                names = [str(it.get(name_field, "")) for it in items]
+                matches = difflib.get_close_matches(name.lower(), [n.lower() for n in names], n=5, cutoff=0.4)
+                for it in items:
+                    if str(it.get(name_field, "")).lower() == name.lower():
+                        return _safe_int(it.get(id_field)), []
+                if matches:
+                    candidates = [it for it in items if str(it.get(name_field, "")).lower() in matches]
+                    return None, [{"id": it.get(id_field), "name": it.get(name_field)} for it in candidates[:5]]
+                return None, []
+
+            if company_name:
+                cid, cands = await _fuzzy_match(company_name, "/companies/", "company_name")
+                resolved["company_id"] = cid
+                if cid is None:
+                    unresolved.append("company")
+                    suggestions["company"] = cands
+
+            if lob_name:
+                lid, cands = await _fuzzy_match(lob_name, "/lobs/", "lob_name")
+                resolved["lob_id"] = lid
+                if lid is None:
+                    unresolved.append("lob")
+                    suggestions["lob"] = cands
+
+            if state_name:
+                sid, cands = await _fuzzy_match(state_name, "/states/", "state_name")
+                if sid is None:
+                    sid, cands = await _fuzzy_match(state_name, "/states/", "state_code")
+                resolved["state_id"] = sid
+                if sid is None:
+                    unresolved.append("state")
+                    suggestions["state"] = cands
+
+            if product_name:
+                pid, cands = await _fuzzy_match(product_name, "/products/", "product_name")
+                resolved["product_id"] = pid
+                if pid is None:
+                    unresolved.append("product")
+                    suggestions["product"] = cands
+
+            if entity_name:
+                eid, cands = await _fuzzy_match(entity_name, "/legal-entities/", "legal_name")
+                resolved["entity_id"] = eid
+                if eid is None:
+                    unresolved.append("entity")
+                    suggestions["entity"] = cands
+
+            return {"resolved": resolved, "unresolved": unresolved, "suggestions": suggestions}
+        except Exception as e:
+            logger.error("resolve_reference_data failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def preview_configuration(
+        bundle_id: str,
+        company_id: int,
+        lob_id: int,
+        state_id: int,
+        product_id: int,
+        entity_id: int,
+        company_name: Optional[str] = None,
+        lob_name: Optional[str] = None,
+        state_name: Optional[str] = None,
+        product_name: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        effective_date: Optional[str] = None,
+        priority: int = 1,
+    ) -> Dict[str, Any]:
+        """
+        Build a full configuration preview for user review before any resources are created.
+
+        This tool generates the <!--AGENT_REVIEW-->...<!--/AGENT_REVIEW--> JSON block that
+        the frontend renders as a structured review card. Always call this tool and present
+        the preview to the user BEFORE calling any create_* tools.
+
+        Args:
+            bundle_id: ID of the parsed Excel bundle.
+            company_id / lob_id / state_id / product_id / entity_id: resolved database IDs.
+            company_name / lob_name / state_name / product_name / entity_name: display names for the card.
+            effective_date: ISO date string (YYYY-MM-DD).
+            priority: Priority for the rating manual (default 1).
+
+        Returns:
+            preview_text: The full text to include verbatim in your response.
+                          It contains the <!--AGENT_REVIEW--> marker block that the UI renders.
+        """
+        try:
+            from app.services import agent_session
+            import json as _json
+
+            bundle = agent_session.get_bundle(bundle_id)
+            if bundle is None:
+                return {"error": f"Bundle '{bundle_id}' not found.", "status_code": 404}
+
+            tables = bundle.get("tables", [])
+            params = bundle.get("parameters", {}) or {}
+            formula = bundle.get("suggested_formula") or bundle.get("formula_detected") or ""
+            algo_name = params.get("algorithm_name") or f"Algorithm — {tables[0]['section_name'] if tables else 'Imported'}"
+            plan_name_val = params.get("plan_name") or f"Plan — {algo_name}"
+            manual_name_val = params.get("manual_name") or f"Manual — {algo_name}"
+
+            # Payload must match AgentReviewData interface in the UI (flat keys)
+            payload = {
+                "bundle_id": bundle_id,
+                "company": company_name or str(company_id),
+                "lob": lob_name or str(lob_id),
+                "state": state_name or str(state_id),
+                "product": product_name or str(product_id),
+                "entity": entity_name or str(entity_id),
+                "effective_date": effective_date or "",
+                "algorithm_name": algo_name,
+                "formula": formula,
+                "plan_name": plan_name_val,
+                "manual_name": manual_name_val,
+                "tables": [
+                    {
+                        "section_name": t.get("section_name"),
+                        "table_type": t.get("table_type", "unknown"),
+                        "row_count": t.get("row_count", 0),
+                    }
+                    for t in tables
+                ],
+            }
+
+            review_json = _json.dumps(payload, indent=2)
+            preview_text = (
+                f"Here is a preview of everything that will be created:\n\n"
+                f"<!--AGENT_REVIEW-->\n{review_json}\n<!--/AGENT_REVIEW-->\n\n"
+                f"Please review the configuration above. "
+                f"Reply **\"Yes, proceed\"** to create all resources, or tell me what to change."
+            )
+
+            return {"preview_text": preview_text, "payload": payload}
+        except Exception as e:
+            logger.error("preview_configuration failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def create_rating_tables_from_bundle(
+        bundle_id: str,
+        company_id: int,
+        lob_id: int,
+        state_id: int,
+        product_id: int,
+        entity_id: int,
+        effective_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create all rating tables from the parsed Excel bundle using the bulk API.
+
+        Only call this AFTER the user has confirmed the preview_configuration.
+        Logs created table IDs in agent_session for rollback if a later step fails.
+
+        Args:
+            bundle_id: ID of the parsed Excel bundle.
+            company_id / lob_id / state_id / product_id / entity_id: resolved IDs.
+            effective_date: ISO date string (YYYY-MM-DD). Defaults to today.
+
+        Returns:
+            created_table_ids: list of integer IDs for successfully created tables.
+            failed_tables: list of {section_name, error} for any failures.
+        """
+        try:
+            from app.services import agent_session
+
+            bundle = agent_session.get_bundle(bundle_id)
+            if bundle is None:
+                return {"error": f"Bundle '{bundle_id}' not found.", "status_code": 404}
+
+            tables = bundle.get("tables", [])
+            if not tables:
+                return {"error": "No tables found in bundle.", "status_code": 400}
+
+            # Pre-flight: all IDs must be positive integers
+            id_fields = {"company_id": company_id, "lob_id": lob_id, "state_id": state_id, "product_id": product_id, "entity_id": entity_id}
+            bad_ids = [k for k, v in id_fields.items() if not isinstance(v, int) or v <= 0]
+            if bad_ids:
+                return {"error": f"Cannot create tables: missing or invalid IDs for {bad_ids}. Resolve all IDs before calling this tool.", "status_code": 400}
+
+            bulk_payload = []
+            for t in tables:
+                bulk_payload.append({
+                    "table_name": t.get("section_name"),
+                    "table_type": t.get("table_type"),
+                    "company": company_id,
+                    "lob": lob_id,
+                    "state": state_id,
+                    "product": product_id,
+                    "entity": entity_id,
+                    "active": True,
+                    "data": t.get("rows", []),
+                    **({"effective_date": effective_date} if effective_date else {}),
+                })
+
+            result = await call_api("POST", "/ratingtables/bulk_ratingtables", json=bulk_payload)
+
+            if result.get("error") and not result.get("results"):
+                detail = result.get("detail", result.get("error"))
+                return {"error": f"Table creation failed: {detail}", "status_code": result.get("status_code", 500)}
+
+            created_ids: List[int] = []
+            failed: List[Dict] = []
+
+            results_list = result.get("results", []) if isinstance(result, dict) else []
+            for i, res in enumerate(results_list):
+                if isinstance(res, dict):
+                    if res.get("error"):
+                        name = tables[i].get("section_name") if i < len(tables) else f"table_{i}"
+                        failed.append({"section_name": name, "error": res.get("message", "unknown error")})
+                    else:
+                        rt = res.get("rating_table") or {}
+                        tid = _safe_int(rt.get("id"))
+                        if not tid and res.get("skipped"):
+                            # Bulk service skips a table when an identical record already exists
+                            # (same table_name/company/lob/state/product/effective_date, no data
+                            # changes) and returns that existing table's id at the top level
+                            # (res["id"]), not nested under "rating_table". Reuse it so downstream
+                            # steps (infer_algorithm, create_rating_manual_from_bundle) still get a
+                            # valid table_ids list instead of silently losing this table.
+                            tid = _safe_int(res.get("id"))
+                        if tid:
+                            created_ids.append(tid)
+                        elif not res.get("error"):
+                            name = tables[i].get("section_name") if i < len(tables) else f"table_{i}"
+                            failed.append({"section_name": name, "error": res.get("message", "skipped with no recoverable id")})
+
+            log = agent_session.get_or_init_log(bundle_id)
+            log["tables"].extend(created_ids)
+            agent_session.save_log(bundle_id, log)
+
+            logger.info("create_rating_tables_from_bundle: created=%s failed=%d", created_ids, len(failed))
+            return {
+                "created_table_ids": created_ids,
+                "failed_tables": failed,
+                "total_created": len(created_ids),
+                "total_failed": len(failed),
+            }
+        except Exception as e:
+            logger.error("create_rating_tables_from_bundle failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def infer_algorithm(
+        bundle_id: str,
+        table_ids: List[int],
+        algorithm_name: Optional[str] = None,
+        formula_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Infer and build the full algorithm specification from the parsed Excel bundle.
+
+        Call this after create_rating_tables_from_bundle has succeeded and returned the
+        table IDs. The result is cached in agent_session and consumed by create_algorithm_from_bundle.
+
+        Args:
+            bundle_id: ID of the parsed Excel bundle.
+            table_ids: IDs of the newly created rating tables (in same order as tables in bundle).
+            algorithm_name: Override the auto-generated algorithm name.
+            formula_override: If the user edited the formula in the review card, pass it here.
+
+        Returns:
+            algorithm_spec: The full spec including formula, calculation_steps, and variables.
+        """
+        try:
+            from app.services import agent_session
+            from app.services.excel_parser import build_calculation_steps, TableSection
+
+            bundle = agent_session.get_bundle(bundle_id)
+            if bundle is None:
+                return {"error": f"Bundle '{bundle_id}' not found.", "status_code": 404}
+
+            params = bundle.get("parameters", {}) or {}
+
+            # A specialized parser (e.g. the "Product Algorithm" cell-range parser)
+            # already produced a complete, validated calculation_steps/formula for
+            # this bundle at upload time. Use it as-is — table classifications or a
+            # formula string supplied via apply_table_classifications/formula_override
+            # cannot improve on it and would only risk corrupting the multi-step
+            # conditional logic it encodes, so those inputs are intentionally ignored
+            # here for prebuilt bundles.
+            if bundle.get("is_prebuilt") and bundle.get("prebuilt_calculation_steps"):
+                name = (
+                    algorithm_name
+                    or params.get("algorithm_name")
+                    or bundle.get("prebuilt_formula", {}).get("description")
+                    or "Imported Algorithm"
+                )
+                spec = {
+                    "algorithm_name": name,
+                    "required_tables": table_ids,
+                    "formula": bundle["prebuilt_formula"],
+                    "calculation_steps": bundle["prebuilt_calculation_steps"],
+                    "variables": bundle.get("prebuilt_variables") or {},
+                }
+                agent_session.store_inferred_algorithm(bundle_id, spec)
+                logger.info("infer_algorithm: used prebuilt spec for bundle=%s (%d steps)",
+                            bundle_id, len(spec["calculation_steps"]))
+                return {"algorithm_spec": spec, "bundle_id": bundle_id}
+
+            tables_raw = bundle.get("tables", [])
+
+            table_sections = [
+                TableSection(
+                    section_name=t.get("section_name", ""),
+                    table_type=t.get("table_type", "lookup_table"),
+                    headers=t.get("headers", []),
+                    rows=t.get("rows", []),
+                    row_count=t.get("row_count", 0),
+                    output_column=t.get("output_column", ""),
+                    input_columns=t.get("input_columns", []),
+                    variable_name=t.get("variable_name", "TABLE"),
+                )
+                for t in tables_raw
+            ]
+
+            formula = (
+                formula_override
+                or bundle.get("suggested_formula")
+                or bundle.get("formula_detected")
+                or ""
+            )
+
+            # Fallback: if no formula was detected or provided by Gemini,
+            # derive a multiplicative formula from the table variable names.
+            if not formula and table_sections:
+                base = [t for t in table_sections if t.table_type == "base_rate_table"]
+                others = [t for t in table_sections if t.table_type != "base_rate_table"]
+                parts = (["BASE_RATE"] if base else []) + [
+                    t.variable_name for t in (others if base else table_sections)
+                    if t.variable_name and t.variable_name != "TABLE"
+                ]
+                formula = " * ".join(parts) if parts else "BASE_RATE"
+                logger.info("infer_algorithm: no formula in bundle, derived fallback: %r", formula)
+
+            name = (
+                algorithm_name
+                or params.get("algorithm_name")
+                or f"Algorithm — {table_sections[0].section_name if table_sections else 'Imported'}"
+            )
+
+            steps, variables, workflow_edges = build_calculation_steps(table_sections, formula, table_ids)
+
+            spec = {
+                "algorithm_name": name,
+                "required_tables": table_ids,
+                "formula": {
+                    "expression": formula,
+                    "description": f"Auto-generated from Excel import (method: {bundle.get('inference_method', 'rules')})",
+                    "workflowEdges": workflow_edges,
+                },
+                "calculation_steps": steps,
+                "variables": variables,
+            }
+
+            agent_session.store_inferred_algorithm(bundle_id, spec)
+
+            return {"algorithm_spec": spec, "bundle_id": bundle_id}
+        except Exception as e:
+            logger.error("infer_algorithm failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def create_algorithm_from_bundle(
+        bundle_id: str,
+        company_id: int,
+        lob_id: int,
+        state_id: int,
+        product_id: int,
+        entity_id: int,
+        effective_date: Optional[str] = None,
+        algorithm_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create the rating algorithm using the spec cached by infer_algorithm.
+
+        Call infer_algorithm first; this tool reads its result from agent_session.
+        Use this tool (not create_algorithm) when executing the Excel import agent workflow.
+
+        Args:
+            bundle_id: ID of the parsed Excel bundle (used to retrieve cached spec).
+            company_id / lob_id / state_id / product_id / entity_id: resolved IDs.
+            effective_date: ISO date string.
+            algorithm_name: Override the algorithm name.
+
+        Returns:
+            algorithm_id: Integer ID of the created algorithm.
+        """
+        try:
+            from app.services import agent_session
+
+            spec = agent_session.get_inferred_algorithm(bundle_id)
+            if spec is None:
+                return {"error": "No inferred algorithm found for this bundle. Call infer_algorithm first.", "status_code": 400}
+
+            # Pre-flight: all IDs must be positive integers
+            id_fields = {"company_id": company_id, "lob_id": lob_id, "state_id": state_id, "product_id": product_id, "entity_id": entity_id}
+            bad_ids = [k for k, v in id_fields.items() if not isinstance(v, int) or v <= 0]
+            if bad_ids:
+                return {"error": f"Cannot create algorithm: missing or invalid IDs for {bad_ids}. Ensure resolve_reference_data returned valid IDs for all fields.", "status_code": 400}
+
+            payload = [{
+                "algorithm_name": algorithm_name or spec["algorithm_name"],
+                "company": company_id,
+                "lob": lob_id,
+                "state": state_id,
+                "product": product_id,
+                "entity": entity_id,
+                "active": True,
+                "required_tables": spec["required_tables"],
+                "formula": spec["formula"],
+                "calculation_steps": spec["calculation_steps"],
+                "variables": spec["variables"],
+                **({"effective_date": effective_date} if effective_date else {}),
+            }]
+
+            result = await call_api("POST", "/algorithms/bulk_algorithms", json=payload)
+
+            if result.get("error") and not result.get("items"):
+                detail = result.get("detail", result.get("error"))
+                return {"error": f"Algorithm creation failed: {detail}", "status_code": result.get("status_code", 500)}
+
+            # bulk_algorithms returns a list; call_api wraps lists as {"items": [...]}
+            results_list = result if isinstance(result, list) else (result.get("items") or result.get("results") or [])
+            for res in results_list:
+                if not isinstance(res, dict) or res.get("error"):
+                    continue
+                algo_data = res.get("algorithm") or res
+                aid = _safe_int(algo_data.get("id")) or _safe_int(res.get("id"))
+                if aid:
+                    log = agent_session.get_or_init_log(bundle_id)
+                    log["algorithm"] = aid
+                    agent_session.save_log(bundle_id, log)
+                    logger.info("create_algorithm_from_bundle: created algorithm_id=%d", aid)
+                    skipped = res.get("skipped", False)
+                    return {"algorithm_id": aid, "algorithm_name": payload[0]["algorithm_name"], "skipped": skipped}
+
+            return {"error": f"Algorithm creation failed: {result}", "status_code": 500}
+        except Exception as e:
+            logger.error("create_algorithm_from_bundle failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def create_rating_plan_from_bundle(
+        bundle_id: str,
+        algorithm_id: int,
+        company_id: int,
+        lob_id: int,
+        state_id: int,
+        product_id: int,
+        entity_id: int,
+        plan_name: Optional[str] = None,
+        effective_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a rating plan linking the algorithm to the product dimensions.
+
+        Use this tool (not create_ratingplan) when executing the Excel import agent workflow.
+
+        Args:
+            bundle_id: Used for rollback logging.
+            algorithm_id: ID returned by create_algorithm_from_bundle.
+            company_id / lob_id / state_id / product_id / entity_id: resolved IDs.
+            plan_name: Override the plan name.
+            effective_date: ISO date string.
+
+        Returns:
+            plan_id: Integer ID of the created rating plan.
+        """
+        try:
+            from app.services import agent_session
+
+            bundle = agent_session.get_bundle(bundle_id)
+            params = (bundle.get("parameters") or {}) if bundle else {}
+            name = plan_name or params.get("plan_name") or f"Plan — {algorithm_id}"
+
+            payload = [{
+                "plan_name": name,
+                "company": company_id,
+                "lob": lob_id,
+                "state": state_id,
+                "product": product_id,
+                "entity": entity_id,
+                "algorithm": algorithm_id,
+                "active": True,
+                **({"effective_date": effective_date} if effective_date else {}),
+            }]
+
+            result = await call_api("POST", "/ratingplans/bulk_ratingplans", json=payload)
+
+            # If call_api already returned an error (e.g. 400 from the API), surface it clearly
+            if result.get("error") and not result.get("items"):
+                detail = result.get("detail", result.get("error"))
+                logger.error("create_rating_plan_from_bundle: API returned error: %s", detail)
+                return {"error": f"Rating plan creation failed: {detail}", "status_code": result.get("status_code", 500)}
+
+            # bulk_ratingplans returns a list; call_api wraps lists as {"items": [...]}
+            results_list = result if isinstance(result, list) else (result.get("items") or result.get("results") or [])
+            for res in results_list:
+                if not isinstance(res, dict) or res.get("error"):
+                    continue
+
+                # Service returns "rating_manual" key (naming inconsistency in the service layer)
+                plan_data = res.get("rating_manual") or res.get("rating_plan") or {}
+                # For "skipped" (plan already exists) the id sits at the top level
+                pid = _safe_int(plan_data.get("id")) or _safe_int(res.get("id"))
+                if pid:
+                    log = agent_session.get_or_init_log(bundle_id)
+                    log["plan"] = pid
+                    agent_session.save_log(bundle_id, log)
+                    skipped = res.get("skipped", False)
+                    logger.info("create_rating_plan_from_bundle: plan_id=%d skipped=%s", pid, skipped)
+                    return {"plan_id": pid, "plan_name": name, "skipped": skipped}
+
+            return {"error": f"Rating plan creation failed: {result}", "status_code": 500}
+        except Exception as e:
+            logger.error("create_rating_plan_from_bundle failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def create_rating_manual_from_bundle(
+        bundle_id: str,
+        table_ids: List[int],
+        company_id: int,
+        lob_id: int,
+        state_id: int,
+        product_id: int,
+        entity_id: int,
+        manual_name: Optional[str] = None,
+        priority: int = 1,
+        effective_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a rating manual grouping all imported tables.
+
+        Use this tool (not create_ratingmanual) when executing the Excel import agent workflow.
+
+        Args:
+            bundle_id: Used for rollback logging.
+            table_ids: IDs returned by create_rating_tables_from_bundle.
+            company_id / lob_id / state_id / product_id / entity_id: resolved IDs.
+            manual_name: Override the manual name.
+            priority: Priority for rule evaluation (default 1; lower = higher priority).
+            effective_date: ISO date string.
+
+        Returns:
+            manual_id: Integer ID of the created rating manual.
+        """
+        try:
+            from app.services import agent_session
+
+            bundle = agent_session.get_bundle(bundle_id)
+            params = (bundle.get("parameters") or {}) if bundle else {}
+            name = manual_name or params.get("manual_name") or f"Manual — bundle {bundle_id[:8]}"
+
+            payload = [{
+                "manual_name": name,
+                "company": company_id,
+                "lob": lob_id,
+                "state": state_id,
+                "product": product_id,
+                "entity": entity_id,
+                "ratingtable": table_ids,
+                "priority": priority,
+                "active": True,
+                **({"effective_date": effective_date} if effective_date else {}),
+            }]
+
+            result = await call_api("POST", "/ratingmanuals/bulk_ratingmanuals", json=payload)
+
+            # If call_api already returned an error (e.g. 400 from the API), surface it clearly
+            if result.get("error") and not result.get("items"):
+                detail = result.get("detail", result.get("error"))
+                logger.error("create_rating_manual_from_bundle: API returned error: %s", detail)
+                return {"error": f"Rating manual creation failed: {detail}", "status_code": result.get("status_code", 500)}
+
+            # bulk_ratingmanuals returns a list; call_api wraps lists as {"items": [...]}
+            results_list = result if isinstance(result, list) else (result.get("items") or result.get("results") or [])
+            for res in results_list:
+                if not isinstance(res, dict) or res.get("error"):
+                    continue
+
+                manual_data = res.get("rating_manual") or {}
+                # For "skipped" (manual already exists) the id sits at the top level
+                mid = _safe_int(manual_data.get("id")) or _safe_int(res.get("id"))
+                if mid:
+                    log = agent_session.get_or_init_log(bundle_id)
+                    log["manual"] = mid
+                    agent_session.save_log(bundle_id, log)
+                    skipped = res.get("skipped", False)
+                    logger.info("create_rating_manual_from_bundle: manual_id=%d skipped=%s", mid, skipped)
+                    return {"manual_id": mid, "manual_name": name, "skipped": skipped}
+
+            return {"error": f"Rating manual creation failed: {result}", "status_code": 500}
+        except Exception as e:
+            logger.error("create_rating_manual_from_bundle failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
+
+    @mcp.tool()
+    async def rollback_session(
+        bundle_id: str,
+        rollback_to: str = "all",
+    ) -> Dict[str, Any]:
+        """
+        Delete all resources created for a bundle, in reverse dependency order.
+
+        Use this when a creation step fails mid-sequence so the user is not left
+        with orphaned data. Deletion order: manual → plan → algorithm → tables.
+
+        Args:
+            bundle_id: The bundle whose created resources should be rolled back.
+            rollback_to: One of "all" | "manual" | "plan" | "algorithm" | "tables".
+                         "all" deletes everything; others delete from that level up.
+
+        Returns:
+            deleted: dict of resource type → list of deleted IDs.
+            failed_deletions: list of {resource, id, error} for any failures.
+        """
+        try:
+            from app.services import agent_session
+
+            log = agent_session.get_or_init_log(bundle_id)
+            deleted: Dict[str, List[int]] = {"manual": [], "plan": [], "algorithm": [], "tables": []}
+            failed: List[Dict] = []
+
+            levels = ["all", "manual", "plan", "algorithm", "tables"]
+            start_level = levels.index(rollback_to) if rollback_to in levels else 0
+
+            async def _delete(endpoint: str, rid: int, resource: str) -> bool:
+                res = await call_api("DELETE", f"{endpoint}/{rid}")
+                if isinstance(res, dict) and res.get("error"):
+                    status_code = res.get("status_code")
+                    # 404 means it was already gone — treat as success for rollback purposes
+                    if status_code == 404:
+                        logger.warning("rollback: %s %d returned 404 (already deleted)", resource, rid)
+                        return True
+                    failed.append({"resource": resource, "id": rid, "error": res.get("error")})
+                    return False
+                return True
+
+            if start_level <= levels.index("manual"):
+                mid = log.get("manual")
+                if mid:
+                    ok = await _delete("/ratingmanuals", mid, "manual")
+                    if ok:
+                        deleted["manual"].append(mid)
+                        log["manual"] = None
+
+            if start_level <= levels.index("plan"):
+                pid = log.get("plan")
+                if pid:
+                    ok = await _delete("/ratingplans", pid, "plan")
+                    if ok:
+                        deleted["plan"].append(pid)
+                        log["plan"] = None
+
+            if start_level <= levels.index("algorithm"):
+                aid = log.get("algorithm")
+                if aid:
+                    ok = await _delete("/algorithms", aid, "algorithm")
+                    if ok:
+                        deleted["algorithm"].append(aid)
+                        log["algorithm"] = None
+
+            if start_level <= levels.index("tables"):
+                for tid in list(log.get("tables", [])):
+                    ok = await _delete("/ratingtables", tid, "table")
+                    if ok:
+                        deleted["tables"].append(tid)
+                log["tables"] = [t for t in log.get("tables", []) if t not in deleted["tables"]]
+
+            agent_session.save_log(bundle_id, log)
+            logger.info("rollback_session bundle=%s deleted=%s failed=%d", bundle_id, deleted, len(failed))
+            return {"deleted": deleted, "failed_deletions": failed}
+        except Exception as e:
+            logger.error("rollback_session failed: %s", e, exc_info=True)
+            return {"error": str(e), "status_code": 500}
+
     # After all tools are registered, populate TOOL_REGISTRY
     # Use globals() to get all functions defined in this module
     # This allows HTTP endpoints to access tools even if _tools is not populated at runtime
     import sys
     current_module = sys.modules[__name__]
-    # Only list tools that are still registered (create/update/delete are commented out)
     known_tool_names = [
-        'get_companies', 'get_legal_entities', 'get_legal_entity_addresses',
-        'get_lobs', 'get_products', 'get_states', 'get_contexts',
-        'get_ratingtables',  # 'get_ratingtable' disabled
-        'get_algorithms',   # 'get_algorithm' disabled
-        'get_ratingmanuals', 'get_ratingmanual',
-        'get_ratingplans',  # 'get_ratingplan' disabled
-        'health_check', 'evaluate_expression'
+        'get_companies', 'get_company', 'create_company', 'update_company', 'delete_company',
+        'get_legal_entities', 'get_legal_entity_addresses',
+        'get_lobs', 'get_lob', 'create_lob', 'update_lob', 'delete_lob',
+        'get_products', 'get_product', 'create_product', 'update_product', 'delete_product',
+        'get_states', 'get_state', 'create_state', 'update_state', 'delete_state',
+        'get_contexts', 'get_context', 'create_context', 'update_context', 'delete_context',
+        'get_ratingtables', 'get_ratingtable', 'create_ratingtable', 'update_ratingtable', 'delete_ratingtable',
+        'get_algorithms', 'get_algorithm', 'create_algorithm', 'update_algorithm', 'delete_algorithm',
+        'get_ratingmanuals', 'get_ratingmanual', 'create_ratingmanual', 'update_ratingmanual', 'delete_ratingmanual',
+        'get_ratingplans', 'get_ratingplan', 'create_ratingplan', 'update_ratingplan', 'delete_ratingplan',
+        'health_check', 'evaluate_expression',
+        # Excel-to-configuration agent tools
+        'analyze_excel_bundle', 'apply_table_classifications',
+        'resolve_reference_data', 'preview_configuration',
+        'create_rating_tables_from_bundle', 'infer_algorithm',
+        'create_algorithm_from_bundle', 'create_rating_plan_from_bundle',
+        'create_rating_manual_from_bundle', 'rollback_session',
     ]
     for tool_name in known_tool_names:
         if tool_name in globals():

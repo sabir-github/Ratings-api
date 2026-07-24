@@ -637,14 +637,17 @@ async def mcp_protocol(request: Request):
                     logger.debug(f"Tool function signature: {sig}")
                     logger.debug(f"Tool args received: {tool_args}")
                     
-                    try:
-                        result = await tool_func(**tool_args)
-                    except TypeError as e:
-                        # Some MCP wrappers expect (tool_name, arguments) instead of **kwargs
-                        try:
-                            result = await tool_func(tool_name, tool_args)
-                        except Exception:
-                            raise e
+                    # All tools in mcp_server.py are plain async functions taking keyword
+                    # arguments (e.g. get_algorithms(company_id=..., ...)) -- there is no
+                    # variant that expects (tool_name, arguments) positionally. A previous
+                    # version of this code retried failed calls that way "in case some MCP
+                    # wrappers expect that", but doing so silently replaced a genuinely
+                    # informative TypeError (e.g. "unexpected keyword argument 'entity_id'")
+                    # with a nonsensical one from calling tool_func(tool_name, tool_args) --
+                    # which binds tool_name/tool_args to the function's first two
+                    # parameters (e.g. skip=<tool_name>, limit=<the whole args dict>).
+                    # Let the real TypeError propagate to the handler below instead.
+                    result = await tool_func(**tool_args)
                     logger.debug(f"Tool {tool_name} returned: {type(result)}")
                     
                     # Check if result is an error dict (from old error handling)

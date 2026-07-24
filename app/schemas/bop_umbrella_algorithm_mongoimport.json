@@ -1,0 +1,170 @@
+[
+  {
+    "id": 100000010,
+    "algorithm_name": "Div 67 BOP Umbrella Rating Plan",
+    "algorithm_type": "umbrella",
+    "company": 100000001,
+    "lob": 100000001,
+    "state": 100000001,
+    "product": 100000001,
+    "entity": 100000001,
+    "version": { "$numberDouble": "1.0" },
+    "effective_date": { "$date": "2026-07-20T00:00:00.000Z" },
+    "expiration_date": null,
+    "active": true,
+    "required_tables": [],
+    "formula": {
+      "expression": "",
+      "description": "Div. 67 Umbrella Rating Plan - computes Charged Premium from vehicle, location, and rating-factor inputs",
+      "workflowEdges": [
+        {
+          "id": "step-order-data_intake-1a2b3c4d-inputs-rating_table_lookup-2b3c4d5e-lookups",
+          "source": "data_intake-1a2b3c4d-inputs",
+          "target": "rating_table_lookup-2b3c4d5e-lookups",
+          "type": "straight",
+          "selectable": true,
+          "focusable": true
+        },
+        {
+          "id": "step-order-rating_table_lookup-2b3c4d5e-lookups-expression-3c4d5e6f-calc",
+          "source": "rating_table_lookup-2b3c4d5e-lookups",
+          "target": "expression-3c4d5e6f-calc",
+          "type": "straight",
+          "selectable": true,
+          "focusable": true
+        },
+        {
+          "id": "step-order-expression-3c4d5e6f-calc-quote_output-4d5e6f7a-final",
+          "source": "expression-3c4d5e6f-calc",
+          "target": "quote_output-4d5e6f7a-final",
+          "type": "straight",
+          "selectable": true,
+          "focusable": true
+        }
+      ]
+    },
+    "calculation_steps": [
+      {
+        "id": "data_intake-1a2b3c4d-inputs",
+        "type": "data_intake",
+        "label": "Rating Inputs",
+        "data": {
+          "stepType": "data_intake",
+          "label": "Rating Inputs",
+          "collapsed": true,
+          "stepOrder": 1,
+          "intakes": [
+            { "question": "Additional Locations?", "variableName": "iprLocations", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Private Passenger Type Local & Medium Radius?", "variableName": "iprPPLocal", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Private Passenger Type Long Distance Radius?", "variableName": "iprPPLong", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Light Truck or Van Local & Medium Radius?", "variableName": "iprLtLocal", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Light Truck or Van Long Distance Radius?", "variableName": "iprLtLong", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Medium Truck or Van Local & Medium Radius?", "variableName": "iprMtLocal", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Medium Truck or Van Long Distance Radius?", "variableName": "iprMtLong", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Heavy Local & Medium Radius?", "variableName": "iprHyLocal", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Heavy Long Distance Radius?", "variableName": "iprHyLong", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Extra Heavy Local & Medium Radius?", "variableName": "iprEHyLocal", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Extra Heavy Long Distance Radius?", "variableName": "iprEHyLong", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "All Other Local & Medium Radius?", "variableName": "iprOtLocal", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "All Other Long Distance Radius?", "variableName": "iprOtLong", "dataType": "number", "inputControl": "input", "options": "", "required": false, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "State of Domicile?", "variableName": "iprState", "dataType": "string", "inputControl": "dropdown", "options": "AK, AL, AR, AZ, CA, CO, CT, DC, DE, FL, GA, HI, IA, ID, IL, IN, KS, KY, LA, MA, MD, ME, MI, MN, MO, MS, MT, NC, ND, NE, NH, NJ, NM, NV, NY, OH, OK, OR, PA, PR, RI, SC, SD, TN, TX, UT, VA, VT, WA, WI, WV, WY", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Program?", "variableName": "iprProgram", "dataType": "string", "inputControl": "dropdown", "options": "High Tech, Offices, Retail, Services, Wholesale", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Hazard Grade?", "variableName": "iprHazardGrade", "dataType": "number", "inputControl": "dropdown", "options": "1,2,3,4,5,6,7,8,9,10", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Distribution System?", "variableName": "iprDistSystem", "dataType": "string", "inputControl": "dropdown", "options": "Agency, Direct Marketing", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Franchise/Association Credit?", "variableName": "iprFranchise", "dataType": "string", "inputControl": "dropdown", "options": "Yes, No", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Credit Score Band?", "variableName": "iprCreditScoreBand", "dataType": "string", "inputControl": "dropdown", "options": "31 to 70, 71 to 90, 91 to 100, Below 30, New Venture or N/A", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Self-Insured Retention?", "variableName": "iprSIR", "dataType": "string", "inputControl": "dropdown", "options": "Zero, 10000", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Limit?", "variableName": "iprLimit", "dataType": "number", "inputControl": "dropdown", "options": "1000000, 2000000, 3000000, 4000000, 5000000, 6000000, 7000000, 8000000, 9000000, 10000000", "required": true, "visibleWhen": "", "disabledWhen": "" },
+            { "question": "Coverage Part Purchased?", "variableName": "iprCoveragePurchased", "dataType": "string", "inputControl": "dropdown", "options": "Yes, No", "required": true, "visibleWhen": "", "disabledWhen": "" }
+          ]
+        },
+        "position": { "x": 462.8333435058594, "y": 155.83333587646484 }
+      },
+      {
+        "id": "rating_table_lookup-2b3c4d5e-lookups",
+        "type": "rating_table_lookup",
+        "label": "Rating Table Lookups",
+        "data": {
+          "stepType": "rating_table_lookup",
+          "label": "Rating Table Lookups",
+          "collapsed": true,
+          "stepOrder": 2,
+          "lookups": [
+            { "tableName": "rate_constants_umbrella", "fieldMappings": [{ "tableField": "key", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Base Premium for Million\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprBaseMillion" },
+            { "tableName": "rate_constants_umbrella", "fieldMappings": [{ "tableField": "key", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Base Premium for Addl Location\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprBaseAddlLoc" },
+            { "tableName": "auto_local_medium", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Private Passenger Type\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRatePPLocal" },
+            { "tableName": "auto_longdistance", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Private Passenger Type\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRatePPLong" },
+            { "tableName": "auto_local_medium", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Light Truck or Van\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateLtLocal" },
+            { "tableName": "auto_longdistance", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Light Truck or Van\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateLtLong" },
+            { "tableName": "auto_local_medium", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Medium Truck or Van\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateMtLocal" },
+            { "tableName": "auto_longdistance", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Medium Truck or Van\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateMtLong" },
+            { "tableName": "auto_local_medium", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Heavy\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateHyLocal" },
+            { "tableName": "auto_longdistance", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Heavy\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateHyLong" },
+            { "tableName": "auto_local_medium", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Extra Heavy\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateEHyLocal" },
+            { "tableName": "auto_longdistance", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"Extra Heavy\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateEHyLong" },
+            { "tableName": "auto_local_medium", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"All Other\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateOtLocal" },
+            { "tableName": "auto_longdistance", "fieldMappings": [{ "tableField": "category", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "\"All Other\"" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprRateOtLong" },
+            { "tableName": "state_factor", "fieldMappings": [{ "tableField": "state", "variableName": "iprState", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprStateFactor" },
+            { "tableName": "program_factor", "fieldMappings": [{ "tableField": "program", "variableName": "iprProgram", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprProgramFactor" },
+            { "tableName": "hazard_grade", "fieldMappings": [{ "tableField": "grade", "variableName": "iprHazardGrade", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprHazardFactor" },
+            { "tableName": "distribution_system_erc", "fieldMappings": [{ "tableField": "state", "variableName": "iprState", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprDistSysCredit", "runCondition": "iprDistSystem != \"Agency\"" },
+            { "tableName": "franchise_association_credit", "fieldMappings": [{ "tableField": "flag", "variableName": "iprFranchise", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprFranchiseFactor" },
+            { "tableName": "credit_score", "fieldMappings": [{ "tableField": "band", "variableName": "iprCreditScoreBand", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprCreditScoreFactor", "runCondition": "iprState != \"NJ\"" },
+            { "tableName": "sir_factor", "fieldMappings": [{ "tableField": "sir", "variableName": "iprSIR", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprSIRFactor" },
+            { "tableName": "increased_limits_factor", "fieldMappings": [{ "tableField": "limit", "variableName": "iprLimit", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "factor", "interpolationMode": "exact", "outputVariable": "oprILF" },
+            { "tableName": "minimum_premium", "fieldMappings": [{ "tableField": "limit", "variableName": "iprLimit", "valueSource": "variable", "compareOperator": "eq" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprMinPremiumSelected" },
+            { "tableName": "minimum_premium", "fieldMappings": [{ "tableField": "limit", "variableName": "", "valueSource": "literal", "compareOperator": "eq", "literalValue": "1000000" }], "outputField": "value", "interpolationMode": "exact", "outputVariable": "oprMinPremium1M" }
+          ]
+        },
+        "position": { "x": 762.8333435058594, "y": 155.83333587646484 }
+      },
+      {
+        "id": "expression-3c4d5e6f-calc",
+        "type": "expression",
+        "label": "Rating Expressions",
+        "data": {
+          "stepType": "expression",
+          "label": "Rating Expressions",
+          "collapsed": true,
+          "stepOrder": 3,
+          "expressions": [
+            { "expression": "(iprPPLocal * oprRatePPLocal) + (iprPPLong * oprRatePPLong)", "outputVariable": "opexVehiclePremiumPP" },
+            { "expression": "(iprLtLocal * oprRateLtLocal) + (iprLtLong * oprRateLtLong)", "outputVariable": "opexVehiclePremiumLt" },
+            { "expression": "(iprMtLocal * oprRateMtLocal) + (iprMtLong * oprRateMtLong)", "outputVariable": "opexVehiclePremiumMt" },
+            { "expression": "(iprHyLocal * oprRateHyLocal) + (iprHyLong * oprRateHyLong)", "outputVariable": "opexVehiclePremiumHy" },
+            { "expression": "(iprEHyLocal * oprRateEHyLocal) + (iprEHyLong * oprRateEHyLong)", "outputVariable": "opexVehiclePremiumEHy" },
+            { "expression": "(iprOtLocal * oprRateOtLocal) + (iprOtLong * oprRateOtLong)", "outputVariable": "opexVehiclePremiumOt" },
+            { "expression": "opexVehiclePremiumPP + opexVehiclePremiumLt + opexVehiclePremiumMt + opexVehiclePremiumHy + opexVehiclePremiumEHy + opexVehiclePremiumOt", "outputVariable": "opexTotalAutoBasePremium" },
+            { "expression": "iprLocations * oprBaseAddlLoc", "outputVariable": "opexAddlLocationsPremium" },
+            { "expression": "oprBaseMillion + opexAddlLocationsPremium + opexTotalAutoBasePremium", "outputVariable": "oprexTotalBasePremium" },
+            { "expression": "oprexTotalBasePremium * oprStateFactor * oprProgramFactor * oprHazardFactor * oprDistSysCredit * oprFranchiseFactor * oprCreditScoreFactor", "outputVariable": "oprexRatingFactorProduct" },
+            { "expression": "MAX(oprMinPremium1M, oprexRatingFactorProduct * oprSIRFactor)", "outputVariable": "oprexPremiumAt1M" },
+            { "expression": "IF(iprLimit == 1000000, oprexPremiumAt1M, MAX(oprMinPremiumSelected + oprexPremiumAt1M, oprexRatingFactorProduct * oprILF * oprSIRFactor))", "outputVariable": "oprexPremiumAtSelectedLimit" }
+          ]
+        },
+        "position": { "x": 1062.8333435058594, "y": 155.83333587646484 }
+      },
+      {
+        "id": "quote_output-4d5e6f7a-final",
+        "type": "quote_output",
+        "label": "Rating Final Output",
+        "data": {
+          "stepType": "quote_output",
+          "label": "Rating Final Output",
+          "collapsed": true,
+          "stepOrder": 4,
+          "outputs": [
+            {
+              "expression": "IF(iprCoveragePurchased == \"No\", 0, ROUND(oprexPremiumAtSelectedLimit, 2))",
+              "formatTemplate": ""
+            }
+          ]
+        },
+        "position": { "x": 1362.8333435058594, "y": 155.83333587646484 }
+      }
+    ],
+    "variables": {},
+    "created_at": { "$date": "2026-07-20T00:00:00.000Z" },
+    "updated_at": { "$date": "2026-07-20T00:00:00.000Z" }
+  }
+]

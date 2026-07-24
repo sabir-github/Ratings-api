@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import companies, lobs, products, states, contexts, upload, ratingtables, algorithms, ratingmanuals, ratingplans, legal_entities, legal_entity_addresses, mcp, chat, evaluate_expression
+from app.api.v1.endpoints import companies, lobs, products, states, contexts, upload, ratingtables, algorithms, ratingmanuals, ratingplans, legal_entities, legal_entity_addresses, mcp, chat, evaluate_expression, agent
 # from app.api.v1.endpoints import auth, users
 
 api_router = APIRouter()
@@ -22,4 +22,5 @@ api_router.include_router(upload.router, prefix="/upload", tags=["upload"])
 api_router.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(evaluate_expression.router, prefix="/evaluate_expression", tags=["evaluate_expression"])
+api_router.include_router(agent.router, prefix="/agent", tags=["agent"])
 

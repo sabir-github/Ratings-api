@@ -47,9 +47,27 @@ def _is_greeting_or_empty(message: str) -> bool:
     return normalized in greetings or normalized.startswith(("hi ", "hello "))
 
 
+def _is_simple_one_liner(message: str) -> bool:
+    """
+    True only for short, single-line messages (no structured fields/newlines).
+
+    These "list X" shortcuts below are meant to catch quick one-off queries like
+    "list companies" or "what states are available" and answer them without a Gemini
+    round-trip. But their keyword checks (a topic word + a common verb, both found
+    anywhere in the message) will also match structured multi-part prompts that just
+    happen to mention the topic word as a field label (e.g. "Company: ACME") and a verb
+    like "show"/"get" elsewhere in the instructions -- silently hijacking the whole
+    request into a raw table dump. Gating on "short and single-line" keeps the shortcut
+    scoped to what it was actually meant for.
+    """
+    if "\n" in message:
+        return False
+    return len(message.strip().split()) <= 10
+
+
 def _is_list_states_request(message: str) -> bool:
     """True if the user is asking to list states (we call get_states directly so response is from system only)."""
-    if not message or not message.strip():
+    if not message or not message.strip() or not _is_simple_one_liner(message):
         return False
     normalized = message.strip().lower()
     if "state" not in normalized:
@@ -67,7 +85,7 @@ def _is_list_states_request(message: str) -> bool:
 
 def _is_list_companies_request(message: str) -> bool:
     """True if the user is asking to list companies (we call get_companies directly so response is from system only)."""
-    if not message or not message.strip():
+    if not message or not message.strip() or not _is_simple_one_liner(message):
         return False
     normalized = message.strip().lower()
     if "compan" not in normalized:
@@ -219,27 +237,13 @@ async def chat(
         # Get conversation history
         conversation_history = conversation_histories.get(session_id, [])
         
-        # First message and user sent greeting or empty -> return fixed greeting so it's always the same
         model_used: Optional[str] = None
+        turn_contents = None
+
+        # Greeting shortcut: skip Gemini entirely for the initial hello
         if not conversation_history and _is_greeting_or_empty(chat_request.message):
             response_text = GREETING_MESSAGE
-        turn_contents = None
-        # Bypass disabled: list states now goes through Gemini so it calls get_states tool
-        # if _is_list_states_request(chat_request.message):
-        #     client = await get_chat_client()
-        #     try:
-        #         result = await client.call_mcp_tool("get_states", {"limit": 100})
-        #         response_text = _format_list_tool_result("get_states", result)
-        #     except Exception as e:
-        #         logger.warning(f"Direct get_states failed, falling back to Gemini: {e}")
-        #         response_text, turn_contents = await client.chat_with_gemini(
-        #             prompt=chat_request.message,
-        #             conversation_history=conversation_history,
-        #             max_iterations=None,
-        #             return_turn_contents=True,
-        #         )
-        #         model_used = client.model_name or settings.GEMINI_MODEL_NAME
-        if _is_list_companies_request(chat_request.message):
+        elif _is_list_companies_request(chat_request.message):
             client = await get_chat_client()
             try:
                 result = await client.call_mcp_tool("get_companies", {"limit": 100})
@@ -262,6 +266,8 @@ async def chat(
                 return_turn_contents=True,
             )
             model_used = client.model_name or settings.GEMINI_MODEL_NAME
+
+        response_text = response_text or ""
 
         # Update conversation history (include tool turns like Gemini CLI for correct follow-up context)
         conversation_history.append({"role": "user", "parts": [{"text": chat_request.message}]})
@@ -315,19 +321,12 @@ async def chat_stream(
             session_id = chat_request.session_id or f"session_{os.urandom(8).hex()}"
             conversation_history = conversation_histories.get(session_id, [])
             
-            # First message and greeting/empty -> fixed greeting
+            turn_contents = None
+
+            # Greeting shortcut: skip Gemini entirely for the initial hello
             if not conversation_history and _is_greeting_or_empty(chat_request.message):
                 response_text = GREETING_MESSAGE
-            turn_contents = None
-            # Bypass disabled: list states now goes through Gemini so it calls get_states tool
-            # if _is_list_states_request(chat_request.message):
-            #     client = await get_chat_client()
-            #     try:
-            #         result = await client.call_mcp_tool("get_states", {"limit": 100})
-            #         response_text = _format_list_tool_result("get_states", result)
-            #     except Exception:
-            #         response_text, turn_contents = await client.chat_with_gemini(...)
-            if _is_list_companies_request(chat_request.message):
+            elif _is_list_companies_request(chat_request.message):
                 client = await get_chat_client()
                 try:
                     result = await client.call_mcp_tool("get_companies", {"limit": 100})
@@ -348,21 +347,25 @@ async def chat_stream(
                     return_turn_contents=True,
                 )
 
+            response_text = response_text or ""
             conversation_history.append({"role": "user", "parts": [{"text": chat_request.message}]})
             if turn_contents:
                 conversation_history.extend(turn_contents)
             else:
                 conversation_history.append({"role": "model", "parts": [{"text": response_text}]})
             conversation_histories[session_id] = conversation_history
-            
+
             # Send response as SSE event
             yield f"data: {JSONResponse(content={'response': response_text, 'session_id': session_id}).body.decode()}\n\n"
             yield "data: [DONE]\n\n"
-                
+
         except Exception as e:
             logger.error(f"Error in chat stream: {e}", exc_info=True)
-            error_data = {"error": str(e)}
-            yield f"data: {JSONResponse(content=error_data, status_code=500).body.decode()}\n\n"
+            # Send error as a valid response so the frontend can display it
+            error_text = f"I'm sorry, I encountered an error: {str(e)}"
+            error_data = {"response": error_text, "session_id": session_id if 'session_id' in dir() else "unknown", "error": str(e)}
+            yield f"data: {JSONResponse(content=error_data).body.decode()}\n\n"
+            yield "data: [DONE]\n\n"
     
     return StreamingResponse(
         event_generator(),

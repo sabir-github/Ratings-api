@@ -1,0 +1,709 @@
+[
+  {
+    "id": 100000017,
+    "algorithm_name": "Div 67 BOP Umbrella Rating Plan New",
+    "algorithm_type": "umbrella",
+    "company": 100000001,
+    "lob": 100000001,
+    "state": 100000001,
+    "product": 100000001,
+    "entity": 100000001,
+    "version": {
+      "$numberDouble": "1.0"
+    },
+    "effective_date": {
+      "$date": "2026-07-20T00:00:00.000Z"
+    },
+    "expiration_date": null,
+    "active": true,
+    "required_tables": [],
+    "formula": {
+      "expression": "chargedPremium",
+      "description": "Div. 67 Umbrella Rating Plan - derived from the 'Product Algorithm' worksheet of Testing_AI_Agent_modified.xlsx",
+      "workflowEdges": [
+        {
+          "id": "e1-2",
+          "source": "step-1",
+          "target": "step-2",
+          "type": "straight",
+          "selectable": true,
+          "focusable": true
+        },
+        {
+          "id": "e2-3",
+          "source": "step-2",
+          "target": "step-3",
+          "type": "straight",
+          "selectable": true,
+          "focusable": true
+        },
+        {
+          "id": "e3-4",
+          "source": "step-3",
+          "target": "step-4",
+          "type": "straight",
+          "selectable": true,
+          "focusable": true
+        }
+      ]
+    },
+    "calculation_steps": [
+      {
+        "id": "step-1",
+        "type": "data_intake",
+        "label": "Div 67 Umbrella - Inputs",
+        "data": {
+          "stepType": "data_intake",
+          "label": "Div 67 Umbrella - Inputs",
+          "collapsed": true,
+          "stepOrder": 1,
+          "intakes": [
+            {
+              "question": "Number of Additional Locations",
+              "variableName": "numAdditionalLocations",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Private Passenger Vehicles - Local & Medium Radius",
+              "variableName": "qtyPPTypeLocal",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Private Passenger Vehicles - Long Distance Radius",
+              "variableName": "qtyPPTypeLongDistance",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Light Truck or Van Vehicles - Local & Medium Radius",
+              "variableName": "qtyLightTruckLocal",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Light Truck or Van Vehicles - Long Distance Radius",
+              "variableName": "qtyLightTruckLongDistance",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Medium Truck or Van Vehicles - Local & Medium Radius",
+              "variableName": "qtyMediumTruckLocal",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Medium Truck or Van Vehicles - Long Distance Radius",
+              "variableName": "qtyMediumTruckLongDistance",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Extra Heavy Vehicles - Local & Medium Radius",
+              "variableName": "qtyExtraHeavyLocal",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Extra Heavy Vehicles - Long Distance Radius",
+              "variableName": "qtyExtraHeavyLongDistance",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Heavy Vehicles - Local & Medium Radius",
+              "variableName": "qtyHeavyLocal",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of Heavy Vehicles - Long Distance Radius",
+              "variableName": "qtyHeavyLongDistance",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of All Other Vehicles - Local & Medium Radius",
+              "variableName": "qtyAllOtherLocal",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Number of All Other Vehicles - Long Distance Radius",
+              "variableName": "qtyAllOtherLongDistance",
+              "dataType": "number",
+              "inputControl": "input",
+              "options": "",
+              "required": false,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "State of Domicile",
+              "variableName": "stateOfDomicile",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "AK,AL,AR,AZ,CA,CO,CT,DC,DE,FL,GA,HI,IA,ID,IL,IN,KS,KY,LA,MA,MD,ME,MI,MN,MO,MS,MT,NC,ND,NE,NH,NJ,NM,NV,NY,OH,OK,OR,PA,PR,RI,SC,SD,TN,TX,UT,VA,VT,WA,WI,WV,WY",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Program",
+              "variableName": "program",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "High Tech,Offices,Retail,Services,Wholesale",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Hazard Grade",
+              "variableName": "hazardGrade",
+              "dataType": "number",
+              "inputControl": "dropdown",
+              "options": "1,2,3,4,5,6,7,8,9,10",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "1. Dist. System Credit",
+              "variableName": "distSystemCredit",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "Direct Marketing,Agency",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "2. Franchise/ Association Credit",
+              "variableName": "franchiseAssociationCredit",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "Yes,No",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "3. Credit Score",
+              "variableName": "creditScore",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "31 to 70,71 to 90,91 to 100,Below 30,New Venture or N/A",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Coverage Part Purchased?",
+              "variableName": "coveragePartPurchased",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "Yes,No",
+              "required": true,
+              "visibleWhen": "",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Limit",
+              "variableName": "umbrellaLimit",
+              "dataType": "number",
+              "inputControl": "dropdown",
+              "options": "1000000,2000000,3000000,4000000,5000000,6000000,7000000,8000000,9000000,10000000",
+              "required": true,
+              "visibleWhen": "coveragePartPurchased == 'Yes'",
+              "disabledWhen": ""
+            },
+            {
+              "question": "Deductible (Self-Insured Retention)",
+              "variableName": "selfInsuredRetention",
+              "dataType": "string",
+              "inputControl": "dropdown",
+              "options": "Zero,10000",
+              "required": true,
+              "visibleWhen": "coveragePartPurchased == 'Yes'",
+              "disabledWhen": ""
+            }
+          ]
+        },
+        "position": {
+          "x": 0.0,
+          "y": 0.0
+        }
+      },
+      {
+        "id": "step-2",
+        "type": "rating_table_lookup",
+        "label": "Div 67 Umbrella - Table Lookups",
+        "data": {
+          "stepType": "rating_table_lookup",
+          "label": "Div 67 Umbrella - Table Lookups",
+          "collapsed": true,
+          "stepOrder": 2,
+          "lookups": [
+            {
+              "tableName": "Table 1 - State Factor (Div 67)",
+              "fieldMappings": [
+                {
+                  "tableField": "State",
+                  "variableName": "stateOfDomicile",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Div 67",
+              "interpolationMode": "exact",
+              "outputVariable": "stateFactor"
+            },
+            {
+              "tableName": "Table 10 - Program Factors",
+              "fieldMappings": [
+                {
+                  "tableField": "Program",
+                  "variableName": "program",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Relativities",
+              "interpolationMode": "exact",
+              "outputVariable": "programFactor"
+            },
+            {
+              "tableName": "Table 2 - Hazard Grade Relativities",
+              "fieldMappings": [
+                {
+                  "tableField": "Grade",
+                  "variableName": "hazardGrade",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Relativities",
+              "interpolationMode": "exact",
+              "outputVariable": "hazardGradeFactor"
+            },
+            {
+              "tableName": "Table 11 - Distribution System ERC",
+              "fieldMappings": [
+                {
+                  "tableField": "State",
+                  "variableName": "stateOfDomicile",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Relativities",
+              "interpolationMode": "exact",
+              "outputVariable": "distSystemERCFactor",
+              "runCondition": "distSystemCredit != 'Agency'"
+            },
+            {
+              "tableName": "Table 13 - Franchise/Association Credit",
+              "fieldMappings": [
+                {
+                  "tableField": "Franchise/Association",
+                  "variableName": "franchiseAssociationCredit",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Factor",
+              "interpolationMode": "exact",
+              "outputVariable": "franchiseCreditFactor"
+            },
+            {
+              "tableName": "Table 7 - Credit Score Factor",
+              "fieldMappings": [
+                {
+                  "tableField": "Credit Score",
+                  "variableName": "creditScore",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Factor",
+              "interpolationMode": "exact",
+              "outputVariable": "creditScoreFactor",
+              "runCondition": "stateOfDomicile != 'NJ'"
+            },
+            {
+              "tableName": "Table 5 - Self-Insured Retention Factor",
+              "fieldMappings": [
+                {
+                  "tableField": "Self-Insured Retention",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "Zero"
+                }
+              ],
+              "outputField": "Factor",
+              "interpolationMode": "exact",
+              "outputVariable": "sirFactorZero"
+            },
+            {
+              "tableName": "Table 5 - Self-Insured Retention Factor",
+              "fieldMappings": [
+                {
+                  "tableField": "Self-Insured Retention",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "10000"
+                }
+              ],
+              "outputField": "Factor",
+              "interpolationMode": "exact",
+              "outputVariable": "sirFactor10000"
+            },
+            {
+              "tableName": "Table 8 - Auto Factors (Local & Medium)",
+              "fieldMappings": [
+                {
+                  "tableField": "Vehicle Type",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "b. PP Type"
+                }
+              ],
+              "outputField": "Rate",
+              "interpolationMode": "exact",
+              "outputVariable": "rateLocalPPType"
+            },
+            {
+              "tableName": "Table 8 - Auto Factors (Local & Medium)",
+              "fieldMappings": [
+                {
+                  "tableField": "Vehicle Type",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "a. Light Truck or Van"
+                }
+              ],
+              "outputField": "Rate",
+              "interpolationMode": "exact",
+              "outputVariable": "rateLocalLightTruck"
+            },
+            {
+              "tableName": "Table 8 - Auto Factors (Local & Medium)",
+              "fieldMappings": [
+                {
+                  "tableField": "Vehicle Type",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "c. Medium Truck or Van"
+                }
+              ],
+              "outputField": "Rate",
+              "interpolationMode": "exact",
+              "outputVariable": "rateLocalMediumTruck"
+            },
+            {
+              "tableName": "Table 8 - Auto Factors (Local & Medium)",
+              "fieldMappings": [
+                {
+                  "tableField": "Vehicle Type",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "e. Extra Heavy"
+                }
+              ],
+              "outputField": "Rate",
+              "interpolationMode": "exact",
+              "outputVariable": "rateLocalExtraHeavy"
+            },
+            {
+              "tableName": "Table 8 - Auto Factors (Local & Medium)",
+              "fieldMappings": [
+                {
+                  "tableField": "Vehicle Type",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "d. Heavy"
+                }
+              ],
+              "outputField": "Rate",
+              "interpolationMode": "exact",
+              "outputVariable": "rateLocalHeavy"
+            },
+            {
+              "tableName": "Table 8 - Auto Factors (Local & Medium)",
+              "fieldMappings": [
+                {
+                  "tableField": "Vehicle Type",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "f. All Other"
+                }
+              ],
+              "outputField": "Rate",
+              "interpolationMode": "exact",
+              "outputVariable": "rateLocalAllOther"
+            },
+            {
+              "tableName": "Table 4 - Increased Limits Factor",
+              "fieldMappings": [
+                {
+                  "tableField": "Limit",
+                  "variableName": "umbrellaLimit",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Factor",
+              "interpolationMode": "exact",
+              "outputVariable": "increasedLimitsFactor",
+              "runCondition": "coveragePartPurchased == 'Yes' && umbrellaLimit != 1000000"
+            },
+            {
+              "tableName": "Table 11 - Minimum Premium",
+              "fieldMappings": [
+                {
+                  "tableField": "Limit",
+                  "variableName": "umbrellaLimit",
+                  "valueSource": "variable",
+                  "compareOperator": "eq"
+                }
+              ],
+              "outputField": "Minimum Premium",
+              "interpolationMode": "exact",
+              "outputVariable": "minimumPremiumSelected",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            },
+            {
+              "tableName": "Table 11 - Minimum Premium",
+              "fieldMappings": [
+                {
+                  "tableField": "Limit",
+                  "variableName": "",
+                  "valueSource": "literal",
+                  "compareOperator": "eq",
+                  "literalValue": "1000000"
+                }
+              ],
+              "outputField": "Minimum Premium",
+              "interpolationMode": "exact",
+              "outputVariable": "minimumPremium1M",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            }
+          ]
+        },
+        "position": {
+          "x": 400.0,
+          "y": 0.0
+        }
+      },
+      {
+        "id": "step-3",
+        "type": "expression",
+        "label": "Div 67 Umbrella - Premium Calculation",
+        "data": {
+          "stepType": "expression",
+          "label": "Div 67 Umbrella - Premium Calculation",
+          "collapsed": true,
+          "stepOrder": 3,
+          "expressions": [
+            {
+              "expression": "numAdditionalLocations * 35",
+              "outputVariable": "basePremiumAddlLocations"
+            },
+            {
+              "expression": "rateLocalPPType * 1.5",
+              "outputVariable": "rateLongPPType"
+            },
+            {
+              "expression": "rateLocalLightTruck * 1.5",
+              "outputVariable": "rateLongLightTruck"
+            },
+            {
+              "expression": "rateLocalMediumTruck * 1.5",
+              "outputVariable": "rateLongMediumTruck"
+            },
+            {
+              "expression": "rateLocalExtraHeavy * 2",
+              "outputVariable": "rateLongExtraHeavy"
+            },
+            {
+              "expression": "rateLocalHeavy * 2",
+              "outputVariable": "rateLongHeavy"
+            },
+            {
+              "expression": "rateLocalAllOther * 2",
+              "outputVariable": "rateLongAllOther"
+            },
+            {
+              "expression": "qtyPPTypeLocal * rateLocalPPType + qtyPPTypeLongDistance * rateLongPPType",
+              "outputVariable": "premiumPPType"
+            },
+            {
+              "expression": "qtyLightTruckLocal * rateLocalLightTruck + qtyLightTruckLongDistance * rateLongLightTruck",
+              "outputVariable": "premiumLightTruck"
+            },
+            {
+              "expression": "qtyMediumTruckLocal * rateLocalMediumTruck + qtyMediumTruckLongDistance * rateLongMediumTruck",
+              "outputVariable": "premiumMediumTruck"
+            },
+            {
+              "expression": "qtyExtraHeavyLocal * rateLocalExtraHeavy + qtyExtraHeavyLongDistance * rateLongExtraHeavy",
+              "outputVariable": "premiumExtraHeavy"
+            },
+            {
+              "expression": "qtyHeavyLocal * rateLocalHeavy + qtyHeavyLongDistance * rateLongHeavy",
+              "outputVariable": "premiumHeavy"
+            },
+            {
+              "expression": "qtyAllOtherLocal * rateLocalAllOther + qtyAllOtherLongDistance * rateLongAllOther",
+              "outputVariable": "premiumAllOther"
+            },
+            {
+              "expression": "premiumPPType + premiumLightTruck + premiumMediumTruck + premiumExtraHeavy + premiumHeavy + premiumAllOther",
+              "outputVariable": "totalAutoBasePremium"
+            },
+            {
+              "expression": "totalAutoBasePremium + basePremiumAddlLocations + 350",
+              "outputVariable": "totalBasePremium"
+            },
+            {
+              "expression": "distSystemCredit == 'Agency' ? 1 : distSystemERCFactor",
+              "outputVariable": "distSystemCreditFactor"
+            },
+            {
+              "expression": "stateOfDomicile == 'NJ' ? 1 : creditScoreFactor",
+              "outputVariable": "creditScoreFactorFinal"
+            },
+            {
+              "expression": "totalBasePremium * stateFactor * programFactor * hazardGradeFactor * distSystemCreditFactor * franchiseCreditFactor * creditScoreFactorFinal",
+              "outputVariable": "factorProduct"
+            },
+            {
+              "expression": "max(minimumPremium1M, factorProduct * sirFactorZero)",
+              "outputVariable": "premiumAt1M_Zero",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            },
+            {
+              "expression": "max(minimumPremium1M, factorProduct * sirFactor10000)",
+              "outputVariable": "premiumAt1M_10000",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            },
+            {
+              "expression": "selfInsuredRetention == '10000' ? sirFactor10000 : sirFactorZero",
+              "outputVariable": "selectedSIRFactor",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            },
+            {
+              "expression": "selfInsuredRetention == '10000' ? premiumAt1M_10000 : premiumAt1M_Zero",
+              "outputVariable": "premiumAt1M_Selected",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            },
+            {
+              "expression": "umbrellaLimit == 1000000 ? premiumAt1M_Selected : max(minimumPremiumSelected + premiumAt1M_Selected, factorProduct * increasedLimitsFactor * selectedSIRFactor)",
+              "outputVariable": "ratedPremiumAtSelectedLimit",
+              "runCondition": "coveragePartPurchased == 'Yes'"
+            },
+            {
+              "expression": "coveragePartPurchased == 'No' ? 0 : ratedPremiumAtSelectedLimit",
+              "outputVariable": "chargedPremium"
+            }
+          ]
+        },
+        "position": {
+          "x": 800.0,
+          "y": 0.0
+        }
+      },
+      {
+        "id": "step-4",
+        "type": "quote_output",
+        "label": "Div 67 Umbrella - Quote Output",
+        "data": {
+          "stepType": "quote_output",
+          "label": "Div 67 Umbrella - Quote Output",
+          "collapsed": true,
+          "stepOrder": 4,
+          "outputs": [
+            {
+              "expression": "totalBasePremium",
+              "formatTemplate": "Total Base Premium: ${value}"
+            },
+            {
+              "expression": "chargedPremium",
+              "formatTemplate": "Charged Premium: ${value}"
+            }
+          ]
+        },
+        "position": {
+          "x": 1200.0,
+          "y": 0.0
+        }
+      }
+    ],
+    "variables": {},
+    "created_at": {
+      "$date": "2026-07-22T02:41:11.000Z"
+    },
+    "updated_at": {
+      "$date": "2026-07-22T02:41:11.000Z"
+    }
+  }
+]

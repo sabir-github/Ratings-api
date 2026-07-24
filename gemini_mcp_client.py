@@ -408,6 +408,10 @@ class GeminiMCPClient:
         - Rating config: get_ratingtables, get_algorithms, get_ratingplans, get_ratingmanuals
         - Calculation: evaluate_expression
         - Health: health_check
+        - Excel import agent: analyze_excel_bundle, apply_table_classifications,
+          resolve_reference_data, preview_configuration,
+          create_rating_tables_from_bundle, infer_algorithm, create_algorithm_from_bundle,
+          create_rating_plan_from_bundle, create_rating_manual_from_bundle, rollback_session
 
         **Legal Entity Notes**:
         Legal entities are registered entities (corporations, partnerships, trusts) that hold insurance licenses.
@@ -415,6 +419,89 @@ class GeminiMCPClient:
         provides a legal entity name. If no entity_id is known, omit it from rating queries (it is optional scope).
 
         If a tool returns no data or an error, inform the user clearly.
+
+        **Excel Import Workflow**:
+        When a user message contains [bundle_id:<id>], an Excel file has been uploaded and parsed.
+        Follow this exact sequence — do not skip or reorder steps:
+
+        STEP 1 — Analyse the bundle:
+          Call analyze_excel_bundle(bundle_id=<id>).
+          The response contains: tables (with headers and sample_rows), formula_detected,
+          parameters_detected, and missing_context.
+
+        STEP 2 — Classify tables and infer formula:
+          If the STEP 1 response has "is_prebuilt": true, the bundle was already fully parsed and
+          validated by a specialized template parser — tables, formula, and calculation steps are
+          complete and locked in. Skip this step entirely (do NOT call apply_table_classifications)
+          and go directly to STEP 3.
+
+          Otherwise, call apply_table_classifications(bundle_id=<id>, classifications=[...], formula=<formula>).
+          For each table in the analyze result, examine headers and sample_rows and determine:
+            - table_type: one of base_rate_table | factor_table | range_factor_table | decision_matrix | lookup_table
+                * base_rate_table  — output column is a base rate or base premium
+                * factor_table     — categorical string input(s) → one numeric factor output
+                * range_factor_table — numeric min/max range inputs → one numeric factor output
+                * decision_matrix  — two-dimensional lookup (row key × column key)
+                * lookup_table     — anything else
+            - variable_name: UPPER_SNAKE_CASE identifier used in the formula
+                * If the output column name is already UPPER_SNAKE_CASE (e.g. STATE_FACTOR, BASE_RATE), use it directly
+                * Otherwise derive from the sheet name (e.g. "State Factor" → STATE_FACTOR)
+            - input_columns: list of column name(s) used as the lookup key
+            - output_column: column name containing the factor or rate value
+          Also infer the formula (e.g. "BASE_RATE * STATE_FACTOR * AGE_FACTOR * CREDIT_FACTOR"):
+            - If formula_detected is non-null, use it verbatim
+            - Otherwise multiply base_rate_table variable by all factor/range_factor_table variables
+            - For decision_matrix or lookup_table, use additive or lookup patterns as appropriate
+
+        STEP 3 — Collect missing context:
+          For each field in missing_context (company, lob, state, product, entity, effective_date),
+          check parameters_detected first (they may already be filled from the sheet).
+          Ask the user only for fields that are still missing. Ask all missing fields in one message.
+
+        STEP 4 — Resolve IDs:
+          Once the user supplies all names, call resolve_reference_data with those names.
+          If any field is unresolved, show the suggestions and ask the user to confirm.
+
+        STEP 5 — Show preview (MANDATORY before any creation):
+          Call preview_configuration with the resolved IDs and names.
+          Return the preview_text from the tool result VERBATIM in your response — do NOT paraphrase it.
+          The preview_text contains <!--AGENT_REVIEW-->...<!--/AGENT_REVIEW--> which the UI renders as a card.
+          Wait for the user to confirm ("Yes, proceed" or similar) before continuing.
+
+        STEP 6 — Create tables:
+          Call create_rating_tables_from_bundle. Save the returned created_table_ids.
+          If failed_tables is non-empty, inform the user and ask whether to continue or stop.
+
+        STEP 7 — Infer algorithm:
+          Call infer_algorithm(bundle_id, table_ids=<created_table_ids>).
+          If the user edited the formula in the review card, pass it as formula_override.
+          If the result contains "error", stop and call rollback_session.
+
+        STEP 8 — Create algorithm:
+          Call create_algorithm_from_bundle(bundle_id, company_id, lob_id, state_id, product_id,
+          entity_id, effective_date, algorithm_name) — pass ALL resolved IDs, not just some.
+          If the result contains "error", read the "error" field for details, call rollback_session,
+          and report the actual error message (not a generic "internal server error").
+
+        STEP 9 — Create rating plan:
+          Call create_rating_plan_from_bundle(bundle_id, algorithm_id=<id>, ...).
+
+        STEP 10 — Create rating manual:
+          Call create_rating_manual_from_bundle(bundle_id, table_ids=<created_table_ids>, ...).
+
+        STEP 11 — Report success:
+          Tell the user what was created (table IDs, algorithm ID, plan ID, manual ID).
+
+        ERROR HANDLING:
+          If any step (6-10) returns an error, immediately call rollback_session(bundle_id, rollback_to="all")
+          to delete everything created so far, then inform the user with the error details.
+          Never leave partial state without rolling back.
+
+        IMPORTANT RULES:
+          - Never call any create_* tool before the user has confirmed the preview in STEP 5.
+          - The preview_text from preview_configuration must be returned VERBATIM — never summarize it.
+          - Unless the bundle is prebuilt (see STEP 2), always call apply_table_classifications before
+            preview_configuration — the card shows table types and formula that come from your classifications.
         """
   
     def _ensure_model(self) -> None:

@@ -871,12 +871,21 @@ class AlgorithmService:
                 })
                 continue
 
-            normalized_created = self._normalize_algorithm_document(created_algorithm)
-            created_algorithm_schema = AlgorithmResponseSchema(**normalized_created)
-            # Convert to dict and serialize datetime objects for JSON compatibility
-            algorithm_dict = created_algorithm_schema.dict()
-            algorithm_dict = self._serialize_datetime(algorithm_dict)
-            
+            try:
+                normalized_created = self._normalize_algorithm_document(created_algorithm)
+                created_algorithm_schema = AlgorithmResponseSchema(**normalized_created)
+                algorithm_dict = created_algorithm_schema.dict()
+                algorithm_dict = self._serialize_datetime(algorithm_dict)
+            except Exception as schema_err:
+                logger.error(f"Failed to serialize created algorithm (ID: {algorithm_id}): {schema_err}")
+                results.append({
+                    "message": f"Algorithm inserted but response serialization failed: {schema_err}",
+                    "id": algorithm_id,
+                    "created": True,
+                    "error": False,
+                })
+                continue
+
             results.append({
                 "message": "Algorithm created successfully with content changes" if existing_algorithm else "Algorithm created successfully",
                 "algorithm": algorithm_dict,
